@@ -7,7 +7,16 @@
 - 通常の機能追加・修正は必ず `kafka` branch で行う。
 - ユーザーが単に「更新する」「直す」「機能追加する」と言った場合も `kafka` を対象にする。
 - `master` を変更してよいのは、ユーザーが明示的に upstream 同期を求めた場合だけ。
+- GitHub の default branch は `kafka` を推奨する。
 - upstream 同期前に `KAFKA_DOWNSTREAM.md` を確認する。
+- GitHub の "Sync fork" は使わず、`kafka/update_from_upstream.sh` を使う。
+
+## Markdown ownership
+
+- `*.md` を一括で downstream 所有にしない。
+- upstream の root `AGENTS.md`, `README.md`, `CHANGELOG.md`, その他 docs は upstream 所有として同期する。
+- KAFKA 固有 Markdown は `KAFKA_DOWNSTREAM.md` と `kafka/**` に限定する。
+- root `AGENTS.md` に KAFKA 固有ルールを恒久追記しない。upstream 更新との conflict を避けるため。
 
 ## Implementation rule
 
