@@ -16,7 +16,17 @@ https://github.com/KAFKA2306/LLM_trader/tree/kafka
 
 **普通の機能追加・修正は `kafka`。upstream 同期だけ `master`。**
 
-「この repo を更新する」とだけ依頼された場合、`master` ではなく `kafka` を更新する。
+GitHub の default branch も `kafka` を推奨します。repository を開いたときの入口と通常作業先を一致させるためです。
+
+「この repo を更新する」とだけ依頼された場合、`master` ではなく `kafka` を更新します。
+
+## Markdown
+
+`*.md` 全体は同期除外しません。
+
+upstream の README / CHANGELOG / AGENTS.md / docs には仕様変更や運用変更が含まれるため、upstream と一緒に追従します。
+
+KAFKA 固有 Markdown は `KAFKA_DOWNSTREAM.md` と `kafka/**` に限定します。
 
 ## Rule
 
@@ -28,6 +38,8 @@ upstream に必要な拡張点がない場合は、downstream patch を恒久保
 
 ## Update flow
 
+**GitHub の "Sync fork" ボタンは使いません。**
+
 通常は次を実行します。
 
 ```bash
@@ -35,8 +47,6 @@ bash kafka/update_from_upstream.sh
 ```
 
 この script は fast-forward できない状態や merge conflict を自動解決せず停止します。
-
-手順は次の通りです。
 
 1. upstream `master` の新しい head を取得する。
 2. fork `master` に独自 commit がないことを確認する。
