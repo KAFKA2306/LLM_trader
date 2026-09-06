@@ -1,52 +1,42 @@
-# KAFKA downstream rule
+# downstream / upstream 同期方針
 
-この fork は 2 つの役割を分ける。
+## 一行ルール
 
-- `master`: `qrak/LLM_trader:master` の mirror。KAFKA 固有変更を入れない。
-- `kafka`: KAFKA 固有開発 branch。独自実装は原則 `kafka/**` に置く。
-- GitHub の default branch は `kafka` を推奨する。通常作業の入口を downstream 側に固定するため。
+**普段は `master` を編集する。upstream は自動で入り、`*.md` は絶対に上書きされない。**
 
-## 「更新する」の解釈
+## Branch
 
-ユーザーが単に「この repo を更新する」「機能を追加する」「修正する」と言った場合は、`kafka` branch の KAFKA 固有実装を更新する。
+- `master`: KAFKA版の正本、default branch
+- `upstream`: `qrak/LLM_trader:master` の exact mirror
+- `kafka`: 旧branch名との互換用エイリアス
 
-`master` を変更してよいのは、ユーザーが明示的に「upstream を同期する」「qrak の更新を取り込む」と依頼した場合だけ。
+## 自動同期
 
-## Markdown の同期方針
+`.github/workflows/upstream-sync.yml` が定期的に upstream を取得し、非 Markdown の upstream 内容を `master` に反映する。
 
-`*.md` 全体を同期対象外にはしない。
+同期方式は merge conflict 解決ではなく **snapshot overlay** とする。
 
-upstream の README、CHANGELOG、AGENTS.md、architecture/documentation も upstream の仕様変更を伝える重要な資産なので、通常どおり同期する。
+1. upstream の最新treeを基準にする。
+2. upstream の全 `*.md` を捨てる。
+3. 現在の KAFKA 所有ファイルを上書きで戻す。
+4. 差分があれば自動commitして push する。
+5. `upstream` branch は upstream exact head に更新する。
+6. `kafka` branch は `master` と同じheadへ追従させる。
 
-KAFKA 固有として同期対象外にするのは次だけ。
+これにより Markdown の競合は構造上発生しない。
 
-- `KAFKA_DOWNSTREAM.md`
+## KAFKA 所有
+
+- すべての `*.md`
 - `kafka/**`
 - `.github/workflows/kafka-*.yml`
+- `.github/workflows/upstream-sync.yml`
 
-root `AGENTS.md` は upstream 所有とし、KAFKA 固有ルールを恒久的に追記しない。KAFKA 固有 authority はこのファイルと `kafka/AGENTS.md` に置く。
-
-## upstream 同期
-
-**GitHub の "Sync fork" ボタンは使わない。**
-
-upstream 更新は `kafka/update_from_upstream.sh` を唯一の標準経路とする。
-
-1. `qrak/LLM_trader:master` を取得する。
-2. `KAFKA2306/LLM_trader:master` に KAFKA 固有 commit がないことを確認する。
-3. fast-forward のみで mirror `master` を更新する。
-4. `kafka` に最新 `master` を取り込む。
-5. `kafka-boundary` と KAFKA 固有 test を確認する。
-
-fast-forward できない、または conflict が発生した場合は自動解決しない。処理を止め、状態を `UNVERIFIED` として報告する。
+それ以外の非 Markdown は upstream 所有。
 
 ## 禁止
 
-- KAFKA 固有機能を `master` に直接 commit しない。
-- upstream core の `src/**`, `config/**`, `start.py`, `tests/**` を downstream patch として常用しない。
-- conflict を `ours` / `theirs` で機械的に解決しない。
-- upstream の DB schema や persistence を独自に複製しない。
-- `*.md` を一括で同期除外しない。
-- GitHub の "Sync fork" で `kafka` を upstream に直接同期しない。
-
-詳細は `kafka/README.md` と `kafka/AGENTS.md` を参照する。
+- GitHub の `Sync fork` を使わない。
+- `upstream` branch を直接編集しない。
+- upstream 所有の非 Markdown ファイルに恒久 patch を置かない。
+- upstream Markdown を正本として扱わない。
