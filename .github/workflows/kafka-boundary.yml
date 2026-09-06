@@ -1,0 +1,40 @@
+name: kafka-boundary
+
+on:
+  push:
+    branches:
+      - kafka
+  pull_request:
+    branches:
+      - kafka
+
+permissions:
+  contents: read
+
+jobs:
+  downstream-boundary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch mirror master
+        run: git fetch origin master
+
+      - name: Reject downstream edits outside extension layer
+        shell: bash
+        run: |
+          set -euo pipefail
+          changed="$(git diff --name-only origin/master...HEAD)"
+          invalid="$(printf '%s\n' "$changed" | grep -Ev '^(kafka/|\.github/workflows/kafka-[^/]+\.ya?ml$)' || true)"
+
+          if [ -n "$invalid" ]; then
+            echo "KAFKA downstream changes must stay under kafka/**."
+            echo "Unexpected paths:"
+            printf '%s\n' "$invalid"
+            exit 1
+          fi
+
+          echo "Boundary OK"
+          printf '%s\n' "$changed"
