@@ -24,10 +24,19 @@ else
 fi
 
 git fetch upstream master
-git fetch origin "$MIRROR_BRANCH" "$LEGACY_ALIAS_BRANCH" 2>/dev/null || true
+git fetch origin "$WORK_BRANCH" "$MIRROR_BRANCH" "$LEGACY_ALIAS_BRANCH"
 
 local_head="$(git rev-parse HEAD)"
+origin_work_sha="$(git rev-parse "origin/$WORK_BRANCH")"
+origin_mirror_sha="$(git rev-parse "origin/$MIRROR_BRANCH")"
+origin_alias_sha="$(git rev-parse "origin/$LEGACY_ALIAS_BRANCH")"
 upstream_sha="$(git rev-parse upstream/master)"
+
+if [ "$local_head" != "$origin_work_sha" ]; then
+  echo "ERROR: local $WORK_BRANCH is not the exact current origin/$WORK_BRANCH."
+  exit 4
+fi
+
 preserve_file="$(mktemp)"
 trap 'rm -f "$preserve_file"' EXIT
 
@@ -46,8 +55,10 @@ git ls-tree -r --name-only "$local_head" | while IFS= read -r path; do
   esac
 done > "$preserve_file"
 
+# Replace the working tree with the upstream snapshot.
 git read-tree --reset -u "$upstream_sha"
 
+# Upstream Markdown is never imported.
 git ls-files -z | while IFS= read -r -d '' path; do
   lower="$(printf '%s' "$path" | tr '[:upper:]' '[:lower:]')"
   case "$lower" in
@@ -57,6 +68,7 @@ git ls-files -z | while IFS= read -r -d '' path; do
   esac
 done
 
+# Overlay downstream-owned files from the previous KAFKA head.
 while IFS= read -r path; do
   [ -n "$path" ] || continue
   git checkout "$local_head" -- "$path"
@@ -72,9 +84,8 @@ fi
 
 new_head="$(git rev-parse HEAD)"
 
-git push --force-with-lease origin "$upstream_sha:refs/heads/$MIRROR_BRANCH"
-git push origin "$WORK_BRANCH"
-git push --force-with-lease origin "$new_head:refs/heads/$LEGACY_ALIAS_BRANCH"
+# All refs move atomically or none of them move.
+git push --atomic origin   --force-with-lease="refs/heads/$WORK_BRANCH:$origin_work_sha"   --force-with-lease="refs/heads/$MIRROR_BRANCH:$origin_mirror_sha"   --force-with-lease="refs/heads/$LEGACY_ALIAS_BRANCH:$origin_alias_sha"   "$new_head:refs/heads/$WORK_BRANCH"   "$upstream_sha:refs/heads/$MIRROR_BRANCH"   "$new_head:refs/heads/$LEGACY_ALIAS_BRANCH"
 
 echo "OK"
 echo "upstream=$upstream_sha"
