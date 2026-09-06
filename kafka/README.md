@@ -1,8 +1,8 @@
-https://github.com/qrak/LLM_trader
+https://github.com/KAFKA2306/LLM_trader/tree/kafka
 
 # KAFKA extension layer
 
-この `kafka` branch は、`KAFKA2306/LLM_trader:master` を upstream mirror として保ったまま、KAFKA 固有の拡張だけを保持するための長期 branch です。
+この `kafka` branch は、`KAFKA2306/LLM_trader:master` を upstream mirror として保ったまま、KAFKA 固有の拡張だけを保持する長期 branch です。
 
 ## Authority
 
@@ -10,6 +10,13 @@ https://github.com/qrak/LLM_trader
 - mirror: `KAFKA2306/LLM_trader:master`
 - downstream extension: `KAFKA2306/LLM_trader:kafka`
 - KAFKA 固有コード: `kafka/**`
+- 更新ルール: `KAFKA_DOWNSTREAM.md`
+
+## 迷ったときの唯一のルール
+
+**普通の機能追加・修正は `kafka`。upstream 同期だけ `master`。**
+
+「この repo を更新する」とだけ依頼された場合、`master` ではなく `kafka` を更新する。
 
 ## Rule
 
@@ -21,12 +28,22 @@ upstream に必要な拡張点がない場合は、downstream patch を恒久保
 
 ## Update flow
 
-1. upstream `master` の新しい head を確認する。
-2. fork `master` が独自 commit を持っていないことを確認する。
+通常は次を実行します。
+
+```bash
+bash kafka/update_from_upstream.sh
+```
+
+この script は fast-forward できない状態や merge conflict を自動解決せず停止します。
+
+手順は次の通りです。
+
+1. upstream `master` の新しい head を取得する。
+2. fork `master` に独自 commit がないことを確認する。
 3. fork `master` を upstream head へ fast-forward する。
 4. `kafka` branch に最新 `master` を取り込む。
-5. KAFKA 固有 test を実行する。
-6. conflict が発生した場合は自動解決しない。core を直接変更していない限り、通常は conflict を発生させない。
+5. downstream boundary を検証する。
+6. conflict があれば merge を abort して失敗終了する。
 
 ## Why
 
