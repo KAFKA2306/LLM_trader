@@ -3,10 +3,11 @@ name: kafka-boundary
 on:
   push:
     branches:
+      - master
       - kafka
   pull_request:
     branches:
-      - kafka
+      - master
 
 permissions:
   contents: read
@@ -19,19 +20,19 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Fetch mirror master
-        run: git fetch origin master
+      - name: Fetch canonical upstream mirror
+        run: git fetch origin upstream
 
-      - name: Reject downstream edits outside extension layer
+      - name: Reject downstream edits outside owned paths
         shell: bash
         run: |
           set -euo pipefail
-          changed="$(git diff --name-only origin/master...HEAD)"
-          invalid="$(printf '%s\n' "$changed" | grep -Ev '^(kafka/|KAFKA_DOWNSTREAM\.md$|\.github/workflows/kafka-[^/]+\.ya?ml$)' || true)"
+          changed="$(git diff --name-only origin/upstream HEAD)"
+          invalid="$(printf '%s\n' "$changed" | grep -Evi '(\.md$|^kafka/|^\.github/workflows/(kafka-[^/]+|upstream-sync)\.ya?ml$)' || true)"
 
           if [ -n "$invalid" ]; then
-            echo "KAFKA downstream changes must stay under kafka/**."
-            echo "Allowed root marker: KAFKA_DOWNSTREAM.md"
+            echo "ERROR: downstream changes must stay in owned paths."
+            echo "Owned paths: all *.md, kafka/**, kafka-* workflows, upstream-sync workflow."
             echo "Unexpected paths:"
             printf '%s\n' "$invalid"
             exit 1
