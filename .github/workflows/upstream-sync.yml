@@ -15,6 +15,7 @@ concurrency:
 jobs:
   sync:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -25,6 +26,9 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Regression-test overlay sync
+        run: bash kafka/test_sync_overlay.sh
 
       - name: Sync upstream code while preserving all Markdown
         run: bash kafka/update_from_upstream.sh
