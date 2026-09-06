@@ -27,10 +27,11 @@ jobs:
         run: |
           set -euo pipefail
           changed="$(git diff --name-only origin/master...HEAD)"
-          invalid="$(printf '%s\n' "$changed" | grep -Ev '^(kafka/|\.github/workflows/kafka-[^/]+\.ya?ml$)' || true)"
+          invalid="$(printf '%s\n' "$changed" | grep -Ev '^(kafka/|KAFKA_DOWNSTREAM\.md$|\.github/workflows/kafka-[^/]+\.ya?ml$)' || true)"
 
           if [ -n "$invalid" ]; then
             echo "KAFKA downstream changes must stay under kafka/**."
+            echo "Allowed root marker: KAFKA_DOWNSTREAM.md"
             echo "Unexpected paths:"
             printf '%s\n' "$invalid"
             exit 1
