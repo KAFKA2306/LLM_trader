@@ -65,6 +65,8 @@ class ModelManager:
         """Async context manager entry."""
         if self._clients.openrouter:  # type: ignore[reportOptionalMemberAccess]
             await self._clients.openrouter.__aenter__()  # type: ignore[reportOptionalMemberAccess]
+        if self._clients.deepseek:  # type: ignore[reportOptionalMemberAccess]
+            await self._clients.deepseek.__aenter__()  # type: ignore[reportOptionalMemberAccess]
         if self._clients.google:  # type: ignore[reportOptionalMemberAccess]
             await self._clients.google.__aenter__()  # type: ignore[reportOptionalMemberAccess]
         if self._clients.google_paid:  # type: ignore[reportOptionalMemberAccess]
@@ -82,6 +84,8 @@ class ModelManager:
         try:
             if self._clients.openrouter:  # type: ignore[reportOptionalMemberAccess]
                 await self._clients.openrouter.close()  # type: ignore[reportOptionalMemberAccess]
+            if self._clients.deepseek:  # type: ignore[reportOptionalMemberAccess]
+                await self._clients.deepseek.close()  # type: ignore[reportOptionalMemberAccess]
             if self._clients.google:  # type: ignore[reportOptionalMemberAccess]
                 await self._clients.google.close()  # type: ignore[reportOptionalMemberAccess]
             if self._clients.google_paid:  # type: ignore[reportOptionalMemberAccess]
@@ -141,7 +145,7 @@ class ModelManager:
                     effective_model, messages, self._orchestrator.get_metadata("local").config, callback=print_stream_callback  # type: ignore[reportOptionalMemberAccess]
                 )
                 if response_json is not None:
-                    result = InvocationResult(  # type: ignore[arg-type]
+                    result = InvocationResult(
                         success=True,
                         response=response_json,  # type: ignore
                         provider="lmstudio",
@@ -184,6 +188,44 @@ class ModelManager:
             raise ValueError(result.error or "invalid response")
         return await self._process_result(result)
 
+    async def send_contract_repair(
+        self,
+        system_message: str,
+        prompt: str,
+        previous_response: str,
+        provider: str | None = None,
+        model: str | None = None
+    ) -> str:
+        """Continue the conversation once to recover a missing JSON block.
+
+        Used when a model reply omits the required ```json block: the original turn is
+        replayed with the reply appended as an assistant message, and the model is asked
+        for the block only. The caller re-parses the returned text against the contract.
+
+        Args:
+            system_message: Original system instructions
+            prompt: Original user prompt
+            previous_response: The reply that omitted the JSON block
+            provider: Optional provider override
+            model: Optional model override
+
+        Returns:
+            Response text from the AI model
+        """
+        messages = [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": prompt},
+            {"role": "assistant", "content": previous_response},
+            {"role": "user", "content": (
+                "Your previous reply omitted the required ```json block. "
+                "Output ONLY the ```json block for the decision described above — valid JSON, no other text."
+            )},
+        ]
+        effective_provider = provider if provider else self.provider
+        self.logger.debug("Sending contract-repair request to recover the missing JSON block")
+        result = await self._orchestrator.get_text_response(effective_provider, messages, model)  # type: ignore[reportOptionalMemberAccess]
+        return await self._process_result(result)
+
     def supports_image_analysis(self, provider_override: str | None = None) -> bool:
         """Check if the selected provider supports image analysis."""
         provider_name = (provider_override or self.provider or "").lower()
@@ -200,12 +242,15 @@ class ModelManager:
         provider_name = (provider_override or self.provider or "unknown").lower()
         if model_override:
             return provider_name, model_override
-        if provider_name in ("googleai", "openrouter", "local"):
+        if provider_name in ("googleai", "openrouter", "local", "deepseek"):
             return provider_name, self._orchestrator.resolve_model(provider_name)  # type: ignore[reportOptionalMemberAccess]
         if provider_name == "all":
             chain: list[str] = []
             if self.config.GOOGLE_STUDIO_MODEL:
                 chain.append(self.config.GOOGLE_STUDIO_MODEL)
+            deepseek_model = self.config.DEEPSEEK_MODEL
+            if deepseek_model:
+                chain.append(deepseek_model)
             if chart:
                 if self.config.OPENROUTER_BASE_MODEL:
                     chain.append(self.config.OPENROUTER_BASE_MODEL)
@@ -279,6 +324,8 @@ class ModelManager:
             is_free_tier = "flash" in result.model.lower() and not result.used_paid_tier
             if not is_free_tier:
                 cost = self.model_pricing.get_cost("google", result.model, prompt_tokens, completion_tokens)  # type: ignore
+        elif result.provider == "deepseek" and result.model:
+            cost = self.model_pricing.get_cost("deepseek", result.model, prompt_tokens, completion_tokens)  # type: ignore
         self.token_counter.process_response_usage(  # type: ignore[reportOptionalMemberAccess]
             usage={"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens, "cost": cost},
             provider=result.provider,

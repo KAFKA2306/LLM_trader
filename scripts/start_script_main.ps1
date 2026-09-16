@@ -28,6 +28,7 @@ $StartPath = Join-Path $RepoRoot 'start.py'
 
 Write-Output "== scripts/start_script_main.ps1 (main) =="
 Write-Output "Graceful stop: use Ctrl+C (app shows confirmation popup)."
+Write-Output "In-place reload: press SHIFT+R in the app console (auto-restarts, no manual restart)."
 Write-Output "Closing the terminal window/tab with X terminates host process immediately."
 Write-Output "Repository root: $RepoRoot"
 
@@ -50,26 +51,18 @@ Write-Output "Activating virtual environment..."
 
 if (-not $SkipInstall) {
     if (Test-Path $RequirementsPath) {
-        Write-Output "Checking installed packages against requirements.txt..."
-        $reqs = Get-Content $RequirementsPath | ForEach-Object { $_.Trim() } | Where-Object { $_ -and -not ($_ -match '^(\s*#)') }
-        $installed = & python -m pip freeze
-        $missing = @()
-        foreach ($req in $reqs) {
-            $name = ($req -split '[=<>!~]')[0].Trim()
-            if ($req -match '==') {
-                $pattern = '^' + [regex]::Escape($req) + '$'
-                if (-not ($installed -match $pattern)) { $missing += $req }
-            }
-            else {
-                $pattern = '^' + [regex]::Escape($name) + '=='
-                if (-not ($installed -match $pattern)) { $missing += $req }
-            }
+        Write-Output "Checking installed packages against requirements.txt (version-aware)..."
+        $missing = @(& python (Join-Path $RepoRoot 'scripts\check_requirements.py') $RequirementsPath)
+        if ($LASTEXITCODE -ne 0) {
+            Write-Output "Requirement check failed (exit $LASTEXITCODE); running pip install to be safe."
+            python -m pip install --upgrade pip
+            python -m pip install -r $RequirementsPath
         }
-        if ($missing.Count -eq 0) {
+        elseif ($missing.Count -eq 0) {
             Write-Output "All requirements satisfied; skipping pip install."
         }
         else {
-            Write-Output "Missing or mismatched requirements detected:`n$missing"
+            Write-Output "Missing or mismatched requirements detected:`n$($missing -join "`n")"
             Write-Output "Installing/updating dependencies from requirements.txt..."
             python -m pip install --upgrade pip
             python -m pip install -r $RequirementsPath
@@ -97,9 +90,22 @@ if (Test-Path $StartPath) {
         Write-Output "Running start.py with default settings..."
     }
 
-    & python $StartPath @startArgs
+    # In-place reload: the bot exits with code 42 on SHIFT+R; restart it here so
+    # no manual stop/start is needed. LLM_TRADER_RELOAD_SUPPORTED tells the bot
+    # this launcher can restart it (otherwise SHIFT+R is politely refused).
+    $ReloadExitCode = 42
+    $env:LLM_TRADER_RELOAD_SUPPORTED = "1"
+    while ($true) {
+        & python $StartPath @startArgs
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -eq $ReloadExitCode) {
+            Write-Output "`n=== Reload requested - restarting start.py in place... ===`n"
+            Start-Sleep -Seconds 1
+            continue
+        }
+        break
+    }
 
-    $exitCode = $LASTEXITCODE
     if ($exitCode -ne 0) {
         Write-Output "`n=== Process exited with error code: $exitCode ===`n"
     }

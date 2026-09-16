@@ -8,6 +8,44 @@ from src.utils.data_utils import SerializableMixin
 
 
 @dataclass(slots=True)
+class MarketConditions(SerializableMixin):
+    """Market state snapshot passed between trading, brain, and risk modules.
+
+    Declared before Position on purpose: Position keeps the entry-time snapshot
+    verbatim (conditions_at_entry) so the close path never has to rebuild it.
+    """
+    trend_direction: str = "NEUTRAL"
+    adx: float = 0.0
+    rsi: float = 50.0
+    rsi_level: str = "NEUTRAL"
+    volatility: str = "MEDIUM"
+    atr: float = 0.0
+    atr_percentage: float = 0.0
+    macd_signal: str = "NEUTRAL"
+    bb_position: str = "MIDDLE"
+    volume_state: str = "NORMAL"
+    is_weekend: bool = False
+    market_sentiment: str = "NEUTRAL"
+    order_book_bias: str = "BALANCED"
+    fear_greed_index: int = 50
+    trend_strength: float = 0.0
+    timeframe_alignment: str | None = None
+    choppiness: float | None = None
+    # --- NEW: indicators enriched for vector DB learning (July 2026) ---
+    vwap: float = 0.0
+    mfi: float = 50.0
+    cmf: float = 0.0
+    bb_percent_b: float = 0.5
+    chandelier_long: float = 0.0
+    pfe: float = 0.0
+    supertrend_direction: str = "NEUTRAL"
+    # --- Social sentiment at position entry (for vector DB similarity) ---
+    social_sentiment_reddit: str = "NEUTRAL"     # BULLISH, SLIGHTLY_BULLISH, NEUTRAL, SLIGHTLY_BEARISH, BEARISH, NO_DATA
+    # --- Portfolio EV snapshot at position entry ---
+    portfolio_pnl_pct: float = 0.0                # portfolio P&L % at entry time
+
+
+@dataclass(slots=True)
 class Position(SerializableMixin):
 
     """Represents an active trading position.
@@ -22,6 +60,9 @@ class Position(SerializableMixin):
     confidence: str  # HIGH, MEDIUM, LOW
     direction: str   # LONG, SHORT
     symbol: str
+    # Full entry-time market snapshot. Required: the brain must never match on
+    # reconstructed or defaulted condition values at close.
+    conditions_at_entry: MarketConditions
     # Confluence factors at entry time for factor performance learning
     # Stored as tuple of (name, score) pairs for frozen dataclass compatibility
     confluence_factors: tuple = field(default_factory=tuple)
@@ -32,6 +73,7 @@ class Position(SerializableMixin):
     size_pct: float = 0.0
     # Market conditions at entry for Brain learning
     atr_at_entry: float = 0.0           # ATR value when position opened
+    atr_percentage_at_entry: float = 0.0  # ATR as % of price at entry (brain volatility matching)
     volatility_level: str = "MEDIUM"    # HIGH, MEDIUM, LOW (derived from ATR%)
     sl_distance_pct: float = 0.0        # abs(entry - SL) / entry as decimal
     tp_distance_pct: float = 0.0        # abs(TP - entry) / entry as decimal
@@ -169,10 +211,6 @@ class TradingMemory(SerializableMixin):
         if len(self.decisions) > self.max_decisions:
             self.decisions.pop(0)
 
-    def get_recent_decisions(self, n: int = 5) -> list[TradeDecision]:
-        """Get the n most recent decisions."""
-        return self.decisions[-n:]
-
     def get_context_summary(
         self,
         full_history: list["TradeDecision"] | None = None,
@@ -305,40 +343,6 @@ class ExitExecutionContext:
 
 
 @dataclass(slots=True)
-class MarketConditions:
-    """Market state snapshot passed between trading, brain, and risk modules."""
-    trend_direction: str = "NEUTRAL"
-    adx: float = 0.0
-    rsi: float = 50.0
-    rsi_level: str = "NEUTRAL"
-    volatility: str = "MEDIUM"
-    atr: float = 0.0
-    atr_percentage: float = 0.0
-    macd_signal: str = "NEUTRAL"
-    bb_position: str = "MIDDLE"
-    volume_state: str = "NORMAL"
-    is_weekend: bool = False
-    market_sentiment: str = "NEUTRAL"
-    order_book_bias: str = "BALANCED"
-    fear_greed_index: int = 50
-    trend_strength: float = 0.0
-    timeframe_alignment: str | None = None
-    choppiness: float | None = None
-    # --- NEW: indicators enriched for vector DB learning (July 2026) ---
-    vwap: float = 0.0
-    mfi: float = 50.0
-    cmf: float = 0.0
-    bb_percent_b: float = 0.5
-    chandelier_long: float = 0.0
-    pfe: float = 0.0
-    supertrend_direction: str = "NEUTRAL"
-    # --- Social sentiment at position entry (for vector DB similarity) ---
-    social_sentiment_reddit: str = "NEUTRAL"     # BULLISH, SLIGHTLY_BULLISH, NEUTRAL, SLIGHTLY_BEARISH, BEARISH, NO_DATA
-    # --- Portfolio EV snapshot at position entry ---
-    portfolio_pnl_pct: float = 0.0                # portfolio P&L % at entry time
-
-
-@dataclass(slots=True)
 class RiskAssessment(SerializableMixin):
     """Represents the calculated risk parameters for a trade."""
     direction: str
@@ -373,11 +377,12 @@ class SessionCosts(SerializableMixin):
     openrouter: float = 0.0
     google: float = 0.0
     lmstudio: float = 0.0
+    deepseek: float = 0.0
 
     @property
     def total(self) -> float:
         """Get total cost across all providers."""
-        return self.openrouter + self.google + self.lmstudio
+        return self.openrouter + self.google + self.lmstudio + self.deepseek
 
 
 @dataclass(slots=True)
@@ -386,3 +391,53 @@ class ProviderCostStats(SerializableMixin):
     total_cost: float = 0.0
     total_input_tokens: int = 0
     total_output_tokens: int = 0
+
+@dataclass(slots=True, frozen=True)
+class MarketSnapshot:
+    """Classified market state handed to the brain/context layers.
+
+    Replaces the 19-keyword block that used to be copied between the analysis
+    engine, TradingBrainService, BrainContextProvider and the indicator
+    classifiers — adding a field now means adding it once, here.
+    """
+    trend_direction: str = "NEUTRAL"
+    adx: float = 0.0
+    rsi: float = 50.0
+    volatility_level: str = "MEDIUM"
+    rsi_level: str = "NEUTRAL"
+    macd_signal: str = "NEUTRAL"
+    volume_state: str = "NORMAL"
+    bb_position: str = "MIDDLE"
+    is_weekend: bool = False
+    market_sentiment: str = "NEUTRAL"
+    order_book_bias: str = "BALANCED"
+    exit_execution_context: ExitExecutionContext | None = None
+    choppiness: float | None = None
+    trend_strength: float = 0.0
+    atr_percentage: float = 0.0
+    mfi: float | None = None
+    cmf: float | None = None
+    vwap: float = 0.0
+    supertrend_direction: str = "NEUTRAL"
+
+    @classmethod
+    def from_conditions(
+        cls,
+        conditions: "MarketConditions",
+        exit_execution_context: "ExitExecutionContext | None" = None,
+    ) -> "MarketSnapshot":
+        """Build a snapshot from a stored MarketConditions record."""
+        return cls(
+            trend_direction=conditions.trend_direction,
+            adx=float(conditions.adx),
+            volatility_level=conditions.volatility,
+            rsi_level=conditions.rsi_level,
+            macd_signal=conditions.macd_signal,
+            volume_state=conditions.volume_state,
+            bb_position=conditions.bb_position,
+            is_weekend=conditions.is_weekend,
+            market_sentiment=conditions.market_sentiment,
+            order_book_bias=conditions.order_book_bias,
+            exit_execution_context=exit_execution_context,
+        )
+

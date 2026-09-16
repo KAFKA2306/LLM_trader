@@ -3,12 +3,12 @@ Template management for prompt building system.
 Handles system prompts, response templates, and analysis steps for TRADING DECISIONS.
 """
 
-import json
 import re
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from src.logger.logger import Logger
+from src.parsing.unified_parser import UnifiedParser
 from src.utils.timeframe_validator import TimeframeValidator
 
 if TYPE_CHECKING:
@@ -103,7 +103,7 @@ class TemplateManager:
                 timeframe_minutes = self.timeframe_validator.to_minutes(timeframe)
             else:
                 timeframe_minutes = TimeframeValidator.to_minutes(timeframe)
-        except Exception as e:  # pylint: disable=broad-exception-caught  # noqa: BLE001
+        except (ValueError, TypeError) as e:
             if self.logger:
                 self.logger.warning("Failed to derive timeframe context for %s: %s", timeframe, e)
 
@@ -138,21 +138,13 @@ class TemplateManager:
         ])
 
     def _extract_previous_analysis(self, previous_response: str) -> dict[str, Any] | None:
-        """Extract the analysis dict from a previous AI response JSON block.
+        """Extract the analysis dict from a previous AI response JSON block (shared parser).
 
         Returns the unwrapped analysis dict, or None if parsing fails or analysis key is absent.
         """
-        blocks = re.findall(r"```json\s*(.*?)\s*```", previous_response, re.DOTALL | re.IGNORECASE)
-        for block in reversed(blocks):
-            try:
-                data = json.loads(block)
-            except (json.JSONDecodeError, TypeError, ValueError):
-                continue
-            analysis = data.get("analysis") or {}
-            return analysis if analysis else None
-        if blocks and self.logger:
-            self.logger.debug("Previous response JSON could not be parsed for snapshot")
-        return None
+        data = UnifiedParser.extract_json_block(previous_response)
+        analysis = (data or {}).get("analysis") or {}
+        return analysis or None
 
     def _normalize_model_verbosity(self, value: str | None = None) -> str:
         """Normalize verbosity value with safe fallback."""
@@ -386,8 +378,9 @@ class TemplateManager:
             _output_rule,
             "",
             "## Decision Protocol",
-            "- Classify regime first: trending, ranging, breakout, reversal, or unclear.",
+            "- Classify regime first: trending, ranging, transitional, breakout, reversal, or unclear.",
             "- TRENDING (ADX >= 25, Choppiness < 38.2): trade with trend. HOLD only on weak R/R or invalidation.",
+            "- TRANSITIONAL (Choppiness 38.2-61.8): no clean regime — this is NOT an automatic HOLD. Classify it on ADX plus DI dominance, not on choppiness alone. (a) ADX >= 25 with one DI clearly leading the other and price closing on the leader's side of the 20 SMA: treat it as an early/developing trend and trade WITH it (standard R/R floor applies). (b) ADX < 25 with no directional dominance: the tape is undecided — HOLD in the middle of the recent range, but at a range boundary a mean-reversion entry against that boundary is valid (SL just beyond the boundary, TP at the opposite boundary).",
             "- RANGING (Choppiness > 61.8): DO NOT treat as a no-trade zone. Range boundaries provide natural entry/exit levels — mean-reversion trades at support/resistance are VALID. Tighter SL at boundary, TP at opposite boundary. R/R >= 1.2 acceptable here (higher-probability setups). When price is in range middle: HOLD (no edge).",
             "- BREAKOUT/REVERSAL: require volume + closed-candle confirmation. HOLD if unconfirmed or false breakout.",
             "- In ALL regimes: HOLD only when invalidation is genuinely unclear or the setup has no identifiable edge.",
@@ -406,7 +399,7 @@ class TemplateManager:
                 "",
             ])
 
-        # Bull/Bear Debate — structured adversarial reasoning (single LLM call, no extra cost)
+        # Bull/Bear debate - single LLM call
         if getattr(self.config, "RESEARCH_TEAM_ENABLED", False):
             header_lines.extend([
                 "## Bull vs Bear Debate Protocol",
@@ -517,7 +510,7 @@ class TemplateManager:
                 if self.timeframe_validator:
                     try:
                         window_minutes = self.timeframe_validator.to_minutes(timeframe) * 2
-                    except Exception as e:  # pylint: disable=broad-exception-caught  # noqa: BLE001
+                    except (ValueError, TypeError) as e:
                         if self.logger:
                             self.logger.warning("Failed to calculate relevance window for %s: %s", timeframe, e)
 
@@ -595,7 +588,7 @@ class TemplateManager:
             rr_borderline = float(thresholds.get("rr_borderline_min", config_min_rr))
         except (TypeError, ValueError):
             rr_borderline = config_min_rr
-        # Config value is the HARD floor; the brain may only loosen it (never tighten above config).
+        # config value is the hard floor; the brain may only loosen it
         rr_borderline = min(rr_borderline, config_min_rr)
         rr_strong = thresholds.get("rr_strong_setup", 2.5)
         trade_count = thresholds.get("trade_count", 0)
@@ -679,7 +672,7 @@ State "365D MACRO CONFLICT: [direction]" in analysis.
 SHORT TRADES: Valid with sufficient confluence even in bull macro. Look for overextension, divergence, volume climax at resistance.
 
 STOP LOSS & TAKE PROFIT:{safe_mae_line}
-- SL distance = ACTIVE RISK PROFILE ATR multiple × ATR (AGGRESSIVE 1.5x / NEUTRAL 2x / CONSERVATIVE 2.5x — see ACTIVE RISK PROFILE section). LONG: SL below the swing low, at least the profile multiple × ATR from entry; SHORT: SL above the swing high, at least the profile multiple × ATR from entry. Never tighten SL below the profile multiple — structural levels may be wider, not narrower. Max {avg_sl:.1f}% from entry. TP at resistance/Fib levels (LONG) or support/Fib levels (SHORT).
+- SL distance = ACTIVE RISK PROFILE ATR multiple × ATR (AGGRESSIVE 1.5x / NEUTRAL 2x / CONSERVATIVE 2.5x — see ACTIVE RISK PROFILE section) is the NORM, not a floor on how far it may sit. LONG: SL below the swing low / range support; SHORT: SL above the swing high / range resistance. Structural levels may be WIDER than the profile multiple, never arbitrarily tighter — but when a validated structural boundary (range edge, swing extreme, or the level whose break invalidates the thesis) sits CLOSER than the profile multiple, place the SL just beyond THAT boundary instead: a stop parked past the range edge risks more than the trade can pay, and no valid setup can carry that. Never place the SL inside noise or at an arbitrary round number — it must sit beyond a real level or beyond the profile multiple. Max {avg_sl:.1f}% from entry. TP at resistance/Fib levels (LONG) or support/Fib levels (SHORT).
 
 Mandatory: All trades require stops based on technical levels (not arbitrary %), accounting for ATR volatility, positioned to invalidate thesis if hit.{chart_validation_guidance}"""
 

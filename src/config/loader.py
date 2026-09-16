@@ -11,13 +11,13 @@ from dotenv import dotenv_values
 
 from src.utils.timeframe_validator import TimeframeValidator
 
-# Get the root directory (where keys.env is located) and config directory (where config.ini is located)
+# ROOT_DIR holds keys.env; CONFIG_DIR holds config.ini
 ROOT_DIR = Path(__file__).parent.parent.parent.resolve()
 CONFIG_DIR = ROOT_DIR / "config"
 KEYS_ENV_PATH = ROOT_DIR / "keys.env"
 CONFIG_INI_PATH = CONFIG_DIR / "config.ini"
 
-VALID_PROVIDERS = {"local", "googleai", "openrouter", "all"}
+VALID_PROVIDERS = {"local", "googleai", "openrouter", "deepseek", "all"}
 VALID_EXIT_TYPES = {"soft", "hard"}
 VALID_MODEL_VERBOSITIES = {"low", "medium", "high"}
 
@@ -221,6 +221,15 @@ class Config:
             "google_code_execution": self.get_config("model_config", "google_code_execution", False),
         }
 
+        if self.PROVIDER.lower() == "deepseek" and not self.DEEPSEEK_API_KEY:
+            raise RuntimeError("`DEEPSEEK_API_KEY` is required in keys.env when using the DeepSeek provider")
+
+        deepseek_max_tokens = self.get_config("model_config", "deepseek_max_tokens", default_max_tokens)
+        self._deepseek_model_config = {
+            "max_tokens": deepseek_max_tokens,
+            "reasoning_effort": self.get_config("model_config", "deepseek_reasoning_effort", "max"),
+        }
+
     def get_env(self, key: str, default: Any = None) -> Any:
         """Get environment variable."""
         return self._env_vars.get(key, default)
@@ -253,11 +262,6 @@ class Config:
     @property
     def COINGECKO_API_KEY(self):
         return self.get_env("COINGECKO_API_KEY")
-
-    @property
-    def ADMIN_USER_IDS(self):
-        """Get list of admin user IDs from environment."""
-        return self.get_env("ADMIN_USER_IDS", [])
 
     @property
     def ADMIN_USERNAME(self):
@@ -297,15 +301,27 @@ class Config:
 
     @property
     def OPENROUTER_BASE_MODEL(self):
-        return self.get_config("ai_providers", "openrouter_base_model", "google/gemini-2.5-pro")
+        return self.get_config("ai_providers", "openrouter_base_model", "google/gemini-3-flash-preview")
 
     @property
     def OPENROUTER_FALLBACK_MODEL(self):
-        return self.get_config("ai_providers", "openrouter_fallback_model", "deepseek/deepseek-r1:free")
+        return self.get_config("ai_providers", "openrouter_fallback_model", "deepseek/deepseek-v4.1-flash")
+
+    @property
+    def DEEPSEEK_API_KEY(self):
+        return self.get_env("DEEPSEEK_API_KEY")
+
+    @property
+    def DEEPSEEK_BASE_URL(self):
+        return self.get_config("ai_providers", "deepseek_base_url", "https://api.deepseek.com")
+
+    @property
+    def DEEPSEEK_MODEL(self):
+        return self.get_config("ai_providers", "deepseek_model", "deepseek-flash")
 
     @property
     def GOOGLE_STUDIO_MODEL(self):
-        return self.get_config("ai_providers", "google_studio_model", "gemini-3.5-flash")
+        return self.get_config("ai_providers", "google_studio_model", "gemini-3.8-flash")
 
     @property
     def BLOCKRUN_BASE_URL(self):
@@ -427,40 +443,10 @@ class Config:
         """Whether Reddit social sentiment fetching is enabled."""
         return bool(self.get_config("social_sentiment", "enabled", False))
 
-    # RL Training Configuration
-    @property
-    def RL_TRAINING_ENABLED(self) -> bool:
-        """Whether PPO fine-tuning of local policy model is enabled."""
-        return bool(self.get_config("rl_training", "enabled", False))
-
-    @property
-    def RL_TRAINING_MODEL(self) -> str:
-        """HuggingFace model ID for the policy network."""
-        return self.get_config("rl_training", "model", "Qwen/Qwen3-0.6B-Instruct")
-
-    @property
-    def RL_TRAINING_UPDATE_INTERVAL(self) -> int:
-        """Number of closed trades between PPO update cycles."""
-        return int(self.get_config("rl_training", "update_interval", 10))
-
-    @property
-    def RL_TRAINING_CHECKPOINT_DIR(self) -> str:
-        """Directory for saving fine-tuned model checkpoints."""
-        return self.get_config("rl_training", "checkpoint_dir", "data/rl_checkpoints")
-
-    @property
-    def RL_TRAINING_DEVICE(self) -> str:
-        """Training device: cpu, cuda, or auto."""
-        return self.get_config("rl_training", "device", "auto")
-
     # RAG Configuration
     @property
     def RAG_UPDATE_INTERVAL_HOURS(self):
         return self.get_config("rag", "update_interval_hours", 4)
-
-    @property
-    def RAG_CATEGORIES_UPDATE_INTERVAL_HOURS(self):
-        return self.get_config("rag", "categories_update_interval_hours", 24)
 
     @property
     def RAG_COINGECKO_UPDATE_INTERVAL_HOURS(self):
@@ -750,17 +736,6 @@ class Config:
         except (TypeError, ValueError):
             return 0.0
 
-    # ── Codebase Vector Index ────────────────────────────────────────────────
-    @property
-    def CODEBASE_INDEX_ENABLED(self) -> bool:
-        """Enable local codebase vector indexing for AI agent search? (default: true)"""
-        return self.get_config("codebase_index", "enabled", True)
-
-    @property
-    def CODEBASE_INDEX_DIR(self) -> str:
-        """Directory path for the codebase vector index (default: data/codebase_index)."""
-        return self.get_config("codebase_index", "index_dir", "data/codebase_index")
-
     @property
     def QUOTE_CURRENCY(self):
         """Extract quote currency from CRYPTO_PAIR (e.g., 'USDC' from 'BTC/USDC')."""
@@ -783,6 +758,8 @@ class Config:
         """
         if self._is_google_model(model_name):
             base = self._google_model_config.copy()
+        elif self._is_deepseek_model(model_name):
+            base = self._deepseek_model_config.copy()
         else:
             base = self._default_model_config.copy()
 
@@ -795,6 +772,10 @@ class Config:
     def _is_google_model(self, model_name: str) -> bool:
         """Determine if a model should use Google-specific configuration."""
         return model_name == self.GOOGLE_STUDIO_MODEL
+
+    def _is_deepseek_model(self, model_name: str) -> bool:
+        """Determine if a model should use DeepSeek-specific configuration."""
+        return model_name == self.DEEPSEEK_MODEL
 
 
 # Create global config instance

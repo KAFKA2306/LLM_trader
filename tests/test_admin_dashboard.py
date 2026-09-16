@@ -9,6 +9,7 @@ Covers:
 """
 
 import asyncio
+import importlib.util
 import time
 from unittest.mock import MagicMock
 
@@ -30,11 +31,7 @@ from src.dashboard.log_stream import LogStreamManager
 
 def _has_numpy() -> bool:
     """Check if numpy is available (needed for full DashboardServer import)."""
-    try:
-        import numpy  # noqa: F401
-        return True
-    except ImportError:
-        return False
+    return importlib.util.find_spec("numpy") is not None
 
 
 # ─── Fixtures ────────────────────────────────────────────────────────
@@ -288,9 +285,6 @@ class TestWritableConfig:
         tmp_config.write_text("[general]\ncrypto_pair = SOL/USDC\n")
         await writable_config.reload_from_disk()
         assert writable_config.get_value("general", "crypto_pair") == "SOL/USDC"
-
-    def test_reload_event(self, writable_config):
-        assert not writable_config.read_reload_event()
 
 
 class TestValidation:

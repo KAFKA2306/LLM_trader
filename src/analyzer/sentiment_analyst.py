@@ -118,7 +118,7 @@ class RedditSentimentAnalyst:
                     await asyncio.sleep(self.REQUEST_DELAY_SECONDS)
                 try:
                     posts, error = await self._fetch_subreddit(
-                        session, subreddit, limit  # type: ignore[arg-type]
+                        session, subreddit, limit
                     )
                     if error:
                         errors.append(error)
@@ -129,7 +129,7 @@ class RedditSentimentAnalyst:
                     errors.append(f"{subreddit}: {e}")
         finally:
             if own_session and session is not None:
-                await session.close()  # type: ignore[func-returns-value]
+                await session.close()
 
         result: dict[str, Any] = {
             "posts": all_posts,
@@ -159,7 +159,7 @@ class RedditSentimentAnalyst:
         """
         url = self.BASE_URL.format(subreddit=subreddit)
         timeout = aiohttp.ClientTimeout(total=15)
-        for attempt in range(self.MAX_RETRIES):
+        for _ in range(self.MAX_RETRIES):
             async with session.get(
                 url, params={"limit": limit}, timeout=timeout
             ) as resp:

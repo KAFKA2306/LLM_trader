@@ -5,6 +5,7 @@ between various components like the market analyzer, trading strategy, and exter
 """
 import asyncio
 import io
+import os
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -63,7 +64,6 @@ class BotServices:
     memory_service: TradingMemoryService
     exit_monitor: ExitMonitor
     sentiment_analyst: Any = None  # RedditSentimentAnalyst, injected by composition root
-    rl_policy: Any = None  # RLPolicyNetwork, local LLM inference
     executor_handler: Any = None  # ExecutorHandler, wired by composition root
     ev_formatter: Any = None  # EVFrameworkFormatter, injected by composition root
     dashboard_state: Any = None
@@ -116,7 +116,6 @@ class CryptoTradingBot:
         # Executor pipeline
         self.executor_handler = services.executor_handler
         self.sentiment_analyst = services.sentiment_analyst
-        self.rl_policy = services.rl_policy
         self.ev_formatter = services.ev_formatter
         self.dashboard_state = services.dashboard_state
 
@@ -183,6 +182,9 @@ class CryptoTradingBot:
         self.keyboard_handler.register_command("a", self._force_analysis_now, "Force immediate analysis")
         self.keyboard_handler.register_command("h", self._show_help, "Show available keyboard commands")
         self.keyboard_handler.register_command("q", self._request_shutdown, "Quit the application")
+        self.keyboard_handler.register_command(
+            "R", self._request_reload, "Reload (in-place restart)"
+        )
 
         # Start keyboard handler task
         keyboard_task = asyncio.create_task(
@@ -326,14 +328,14 @@ class CryptoTradingBot:
             self.logger.error("Analysis failed: %s", result["error"])
             return
 
-        # Inject social sentiment + EV snapshot for vector DB learning on position entry
+        # extra fields consumed by vector-memory learning on entry
         result["_social_sentiment_reddit"] = self._reddit_sentiment_label
         demo_capital = float(getattr(self.config, "DEMO_QUOTE_CAPITAL", 10000.0))
         current_capital = self.statistics_service.get_current_capital(demo_capital)
         result["_portfolio_pnl_pct"] = ((current_capital - demo_capital) / demo_capital * 100) if demo_capital > 0 else 0.0
 
         await self.persistence.async_save_last_analysis_time()
-        decision = await self.trading_strategy.process_analysis(result, self.current_symbol)  # type: ignore[reportCallIssue]
+        decision = await self.trading_strategy.process_analysis(result, self.current_symbol)
 
         if decision:
             await self._handle_new_position(decision, current_price)
@@ -425,7 +427,7 @@ class CryptoTradingBot:
 
     async def _build_analysis_context(self, current_price: float | None, current_ticker) -> dict[str, Any]:
         """Build context data for market analysis"""
-        position_context = self.trading_strategy.get_position_context(current_price)  # type: ignore[reportCallIssue]
+        position_context = self.trading_strategy.get_position_context(current_price)
         memory_context = self.memory_service.get_context_summary()
         statistics_context = self.statistics_service.get_context()
 
@@ -466,7 +468,6 @@ class CryptoTradingBot:
             "dynamic_thresholds": dynamic_thresholds,
             "ev_context": self._build_ev_context(),
             "additional_context": additional_context,
-            "rl_policy": self.rl_policy,
         }
 
     def _get_formatted_last_analysis_time(self) -> str | None:
@@ -513,12 +514,9 @@ class CryptoTradingBot:
             chart_image = None
             last_chart_buffer = self.market_analyzer.last_chart_buffer if self.market_analyzer else None
             if last_chart_buffer is not None:
-                try:
-                    last_chart_buffer.seek(0)
-                    chart_image = io.BytesIO(last_chart_buffer.getvalue())
-                    chart_image.seek(0)
-                except Exception as e:  # noqa: BLE001
-                    self.logger.warning("Failed to prepare chart image for Discord notification: %s", e)
+                last_chart_buffer.seek(0)
+                chart_image = io.BytesIO(last_chart_buffer.getvalue())
+                chart_image.seek(0)
 
             await self.discord_notifier.send_analysis_notification(
                 result=result,
@@ -737,4 +735,25 @@ class CryptoTradingBot:
             for task in self.tasks:
                 if not task.done():
                     task.cancel()
+
+    async def _request_reload(self):
+        """Request an in-place reload: graceful shutdown, then the launcher restarts the bot.
+
+        Only available when the bot was started by a launcher that supports it
+        (scripts/start_script_*.ps1 set LLM_TRADER_RELOAD_SUPPORTED=1).
+        """
+        if not self.shutdown_manager:
+            self.logger.warning("Reload unavailable: shutdown manager missing")
+            return
+        if os.environ.get("LLM_TRADER_RELOAD_SUPPORTED") != "1":
+            self.logger.warning(
+                "Reload requested, but this launch cannot restart in place "
+                "(start the bot via scripts/start_script_main.ps1). Use 'q' to quit."
+            )
+            return
+        if not self.shutdown_manager.request_reload():
+            self.logger.info("Reload ignored - shutdown already in progress")
+            return
+        self.logger.info("Reload requested - shutting down for in-place restart...")
+        self.running = False
 

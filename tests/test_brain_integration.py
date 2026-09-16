@@ -1,4 +1,4 @@
-"""Tests for brain.py changes: classify_adx_label integration in _build_rich_context_string."""
+"""Tests for the trading brain service and its context provider."""
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
@@ -8,6 +8,7 @@ from src.trading.brain import TradingBrainService
 from src.trading.data_models import (
     ExitExecutionContext,
     MarketConditions,
+    MarketSnapshot,
     Position,
     TradeDecision,
 )
@@ -40,6 +41,7 @@ def _make_position(**overrides):
         confidence="HIGH",
         direction="LONG",
         symbol="BTC/USDC",
+        conditions_at_entry=MarketConditions(),
     )
     defaults.update(overrides)
     return Position(**defaults)
@@ -49,76 +51,78 @@ def _make_position(**overrides):
 
 
 class TestBuildRichContextString:
-    """Verify _build_rich_context_string uses classify_adx_label."""
+    """Verify the context string uses classify_adx_label."""
 
     def setup_method(self):
         self.brain = _make_brain()
 
     def test_high_adx_label(self):
-        ctx = self.brain._build_rich_context_string(adx=30)
+        ctx = self.brain.context_provider.build_rich_context_string(MarketSnapshot(adx=30))
         assert "High ADX" in ctx
 
     def test_low_adx_label(self):
-        ctx = self.brain._build_rich_context_string(adx=10)
+        ctx = self.brain.context_provider.build_rich_context_string(MarketSnapshot(adx=10))
         assert "Low ADX" in ctx
 
     def test_medium_adx_label(self):
-        ctx = self.brain._build_rich_context_string(adx=22)
+        ctx = self.brain.context_provider.build_rich_context_string(MarketSnapshot(adx=22))
         assert "Medium ADX" in ctx
 
     def test_contains_trend_direction(self):
-        ctx = self.brain._build_rich_context_string(trend_direction="BULLISH", adx=25)
+        ctx = self.brain.context_provider.build_rich_context_string(MarketSnapshot(trend_direction="BULLISH", adx=25))
         assert "BULLISH" in ctx
 
     def test_contains_volatility(self):
-        ctx = self.brain._build_rich_context_string(adx=25, volatility_level="HIGH")
+        ctx = self.brain.context_provider.build_rich_context_string(MarketSnapshot(adx=25, volatility_level="HIGH"))
         assert "HIGH Volatility" in ctx
 
     def test_rsi_included_when_not_neutral(self):
-        ctx = self.brain._build_rich_context_string(adx=25, rsi_level="OVERBOUGHT")
+        ctx = self.brain.context_provider.build_rich_context_string(MarketSnapshot(adx=25, rsi_level="OVERBOUGHT"))
         assert "RSI OVERBOUGHT" in ctx
 
     def test_rsi_excluded_when_neutral(self):
-        ctx = self.brain._build_rich_context_string(adx=25, rsi_level="NEUTRAL")
+        ctx = self.brain.context_provider.build_rich_context_string(MarketSnapshot(adx=25, rsi_level="NEUTRAL"))
         assert "RSI" not in ctx
 
     def test_weekend_flag(self):
-        ctx = self.brain._build_rich_context_string(adx=25, is_weekend=True)
+        ctx = self.brain.context_provider.build_rich_context_string(MarketSnapshot(adx=25, is_weekend=True))
         assert "Weekend Low Volume" in ctx
 
     def test_separator_is_plus(self):
-        ctx = self.brain._build_rich_context_string(adx=25)
+        ctx = self.brain.context_provider.build_rich_context_string(MarketSnapshot(adx=25))
         assert " + " in ctx
 
     def test_macd_included_when_not_neutral(self):
-        ctx = self.brain._build_rich_context_string(adx=25, macd_signal="BULLISH")
+        ctx = self.brain.context_provider.build_rich_context_string(MarketSnapshot(adx=25, macd_signal="BULLISH"))
         assert "MACD BULLISH" in ctx
 
     def test_volume_included_when_not_normal(self):
-        ctx = self.brain._build_rich_context_string(adx=25, volume_state="ACCUMULATION")
+        ctx = self.brain.context_provider.build_rich_context_string(MarketSnapshot(adx=25, volume_state="ACCUMULATION"))
         assert "Volume ACCUMULATION" in ctx
 
     def test_bb_included_when_not_middle(self):
-        ctx = self.brain._build_rich_context_string(adx=25, bb_position="UPPER")
+        ctx = self.brain.context_provider.build_rich_context_string(MarketSnapshot(adx=25, bb_position="UPPER"))
         assert "Price at BB UPPER" in ctx
 
     def test_sentiment_included(self):
-        ctx = self.brain._build_rich_context_string(adx=25, market_sentiment="EXTREME_FEAR")
+        ctx = self.brain.context_provider.build_rich_context_string(MarketSnapshot(adx=25, market_sentiment="EXTREME_FEAR"))
         assert "Sentiment EXTREME_FEAR" in ctx
 
     def test_order_book_included(self):
-        ctx = self.brain._build_rich_context_string(adx=25, order_book_bias="BUY_PRESSURE")
+        ctx = self.brain.context_provider.build_rich_context_string(MarketSnapshot(adx=25, order_book_bias="BUY_PRESSURE"))
         assert "OrderBook BUY_PRESSURE" in ctx
 
     def test_exit_execution_included(self):
-        ctx = self.brain._build_rich_context_string(
-            adx=25,
-            exit_execution_context=ExitExecutionContext(
+        ctx = self.brain.context_provider.build_rich_context_string(
+            MarketSnapshot(
+                adx=25,
+                exit_execution_context=ExitExecutionContext(
                 stop_loss_type="hard",
                 stop_loss_check_interval="15m",
                 take_profit_type="hard",
-                take_profit_check_interval="15m",
-            ),
+                    take_profit_check_interval="15m",
+                ),
+            )
         )
         assert "Exit Execution: SL hard/15m | TP hard/15m" in ctx
 
@@ -143,6 +147,7 @@ class TestUpdateFromClosedTrade:
             stop_loss_check_interval_at_entry="15m",
             take_profit_type_at_entry="soft",
             take_profit_check_interval_at_entry="4h",
+            conditions_at_entry=MarketConditions(),
         )
 
         self.brain.update_from_closed_trade(
@@ -186,6 +191,46 @@ class TestUpdateFromClosedTrade:
         assert call_kwargs["metadata"]["take_profit_type"] == "hard"
         assert call_kwargs["metadata"]["take_profit_check_interval"] == "15m"
 
+    def test_closed_trade_stores_normalised_vwap_and_chandelier_distances(self):
+        brain = _make_brain(ExitExecutionContext(
+            stop_loss_type="hard",
+            stop_loss_check_interval="15m",
+            take_profit_type="hard",
+            take_profit_check_interval="15m",
+        ))
+        position = _make_position()
+
+        brain.update_from_closed_trade(
+            position=position,
+            close_price=110.0,
+            close_reason="take_profit",
+            market_conditions=MarketConditions(vwap=99.0, chandelier_long=98.5),
+        )
+
+        metadata = brain.vector_memory.store_experience.call_args.kwargs["metadata"]
+        assert metadata["vwap_distance_pct"] == pytest.approx(0.01)
+        assert metadata["chandelier_distance_pct"] == pytest.approx(0.015)
+
+    def test_closed_trade_omits_distances_when_source_levels_were_never_computed(self):
+        brain = _make_brain(ExitExecutionContext(
+            stop_loss_type="hard",
+            stop_loss_check_interval="15m",
+            take_profit_type="hard",
+            take_profit_check_interval="15m",
+        ))
+        position = _make_position()
+
+        brain.update_from_closed_trade(
+            position=position,
+            close_price=110.0,
+            close_reason="take_profit",
+            market_conditions=MarketConditions(adx=30.0, trend_direction="BULLISH"),
+        )
+
+        metadata = brain.vector_memory.store_experience.call_args.kwargs["metadata"]
+        assert metadata["vwap_distance_pct"] is None
+        assert metadata["chandelier_distance_pct"] is None
+
     def test_closed_trade_stores_original_ai_decision_snapshot(self):
         position = Position(
             entry_price=100.0,
@@ -196,6 +241,7 @@ class TestUpdateFromClosedTrade:
             confidence="MEDIUM",
             direction="LONG",
             symbol="BTC/USDC",
+            conditions_at_entry=MarketConditions(),
         )
         entry_decision = TradeDecision(
             timestamp=datetime(2026, 4, 30, tzinfo=timezone.utc),
@@ -240,9 +286,9 @@ class TestUpdateFromClosedTrade:
 
     def test_reflection_runs_on_default_four_hour_interval(self):
         self.brain._trade_count = 4
-        self.brain._trigger_reflection = MagicMock()
-        self.brain._trigger_loss_reflection = MagicMock()
-        self.brain._trigger_ai_mistake_reflection = MagicMock()
+        self.brain.trigger_reflection = MagicMock()
+        self.brain.trigger_loss_reflection = MagicMock()
+        self.brain.trigger_ai_mistake_reflection = MagicMock()
 
         self.brain.update_from_closed_trade(
             position=_make_position(),
@@ -251,16 +297,16 @@ class TestUpdateFromClosedTrade:
             market_conditions=MarketConditions(adx=30.0, trend_direction="BULLISH"),
         )
 
-        self.brain._trigger_reflection.assert_called_once()
-        self.brain._trigger_loss_reflection.assert_called_once()
-        self.brain._trigger_ai_mistake_reflection.assert_called_once()
+        self.brain.trigger_reflection.assert_called_once()
+        self.brain.trigger_loss_reflection.assert_called_once()
+        self.brain.trigger_ai_mistake_reflection.assert_called_once()
 
     def test_reflection_uses_timeframe_derived_closed_trade_interval(self):
         brain = _make_brain(timeframe_minutes=60)
         brain._trade_count = 4
-        brain._trigger_reflection = MagicMock()
-        brain._trigger_loss_reflection = MagicMock()
-        brain._trigger_ai_mistake_reflection = MagicMock()
+        brain.trigger_reflection = MagicMock()
+        brain.trigger_loss_reflection = MagicMock()
+        brain.trigger_ai_mistake_reflection = MagicMock()
 
         brain.update_from_closed_trade(
             position=_make_position(),
@@ -269,9 +315,9 @@ class TestUpdateFromClosedTrade:
             market_conditions=MarketConditions(adx=30.0, trend_direction="BULLISH"),
         )
 
-        brain._trigger_reflection.assert_not_called()
-        brain._trigger_loss_reflection.assert_not_called()
-        brain._trigger_ai_mistake_reflection.assert_not_called()
+        brain.trigger_reflection.assert_not_called()
+        brain.trigger_loss_reflection.assert_not_called()
+        brain.trigger_ai_mistake_reflection.assert_not_called()
 
         brain._trade_count = 6
         brain.update_from_closed_trade(
@@ -281,16 +327,16 @@ class TestUpdateFromClosedTrade:
             market_conditions=MarketConditions(adx=30.0, trend_direction="BULLISH"),
         )
 
-        brain._trigger_reflection.assert_called_once()
-        brain._trigger_loss_reflection.assert_called_once()
-        brain._trigger_ai_mistake_reflection.assert_called_once()
+        brain.trigger_reflection.assert_called_once()
+        brain.trigger_loss_reflection.assert_called_once()
+        brain.trigger_ai_mistake_reflection.assert_called_once()
 
 
 # ── get_vector_context ──────────────────────────────────────────
 
 
 class TestGetVectorContext:
-    """Verify get_vector_context calls _build_rich_context_string and forwards to vector_memory."""
+    """Verify get_vector_context builds the query and forwards it to vector_memory."""
 
     def setup_method(self):
         self.brain = _make_brain()
@@ -301,25 +347,27 @@ class TestGetVectorContext:
         }
 
     def test_calls_vector_memory_get_context(self):
-        self.brain.get_vector_context(adx=30, trend_direction="BULLISH")
+        self.brain.context_provider.get_vector_context(MarketSnapshot(adx=30, trend_direction="BULLISH"))
         self.brain.vector_memory.get_context_for_prompt.assert_called_once()
 
     def test_query_contains_adx_label(self):
-        self.brain.get_vector_context(adx=30, trend_direction="BULLISH")
+        self.brain.context_provider.get_vector_context(MarketSnapshot(adx=30, trend_direction="BULLISH"))
         call_args = self.brain.vector_memory.get_context_for_prompt.call_args
         query_str = call_args[0][0]  # first positional arg is context_query
         assert "High ADX" in query_str
 
     def test_query_contains_exit_execution_context(self):
-        self.brain.get_vector_context(
-            adx=30,
-            trend_direction="BULLISH",
-            exit_execution_context=ExitExecutionContext(
-                stop_loss_type="hard",
-                stop_loss_check_interval="15m",
-                take_profit_type="soft",
-                take_profit_check_interval="4h",
-            ),
+        self.brain.context_provider.get_vector_context(
+            MarketSnapshot(
+                adx=30,
+                trend_direction="BULLISH",
+                exit_execution_context=ExitExecutionContext(
+                    stop_loss_type="hard",
+                    stop_loss_check_interval="15m",
+                    take_profit_type="soft",
+                    take_profit_check_interval="4h",
+                ),
+            )
         )
         call_args = self.brain.vector_memory.get_context_for_prompt.call_args
         query_str = call_args[0][0]
@@ -426,6 +474,7 @@ class TestTrackPositionUpdateWithPolicy:
             current_price=105.0,
             current_pnl_pct=5.0,
             tightening_evaluation=evaluation,
+            market_conditions=MarketConditions(),
         )
 
         call_kwargs = brain.experience_recorder.track_position_update.call_args.kwargs
@@ -445,6 +494,7 @@ class TestTrackPositionUpdateWithPolicy:
             new_tp=110.0,
             current_price=105.0,
             current_pnl_pct=5.0,
+            market_conditions=MarketConditions(),
         )
 
         call_kwargs = brain.experience_recorder.track_position_update.call_args.kwargs
@@ -469,7 +519,7 @@ class TestReflectionRuleFormatting:
 
         brain.vector_memory.get_trade_metadatas.return_value = win_metas
 
-        brain._trigger_reflection()
+        brain.trigger_reflection()
 
         assert brain.vector_memory.store_semantic_rule.called
         rule_text = brain.vector_memory.store_semantic_rule.call_args.kwargs["rule_text"]
@@ -490,7 +540,7 @@ class TestReflectionRuleFormatting:
 
         brain.vector_memory.get_trade_metadatas.return_value = all_metas
 
-        brain._trigger_reflection()
+        brain.trigger_reflection()
 
         assert not brain.vector_memory.store_semantic_rule.called
 
@@ -514,7 +564,7 @@ class TestReflectionRuleFormatting:
 
         brain.vector_memory.get_trade_metadatas.return_value = all_metas
 
-        brain._trigger_reflection()
+        brain.trigger_reflection()
 
         assert brain.vector_memory.store_semantic_rule.called
         kwargs = brain.vector_memory.store_semantic_rule.call_args.kwargs
@@ -548,7 +598,7 @@ class TestReflectionRuleFormatting:
 
         brain.vector_memory.get_trade_metadatas.return_value = win_metas
 
-        brain._trigger_reflection()
+        brain.trigger_reflection()
 
         kwargs = brain.vector_memory.store_semantic_rule.call_args.kwargs
         assert kwargs["rule_id"] == "rule_best_long_bullish_high_adx_sl_hard_15m_tp_hard_15m"
@@ -571,7 +621,7 @@ class TestReflectionRuleFormatting:
 
         brain.vector_memory.get_trade_metadatas.return_value = loss_metas
 
-        brain._trigger_loss_reflection()
+        brain.trigger_loss_reflection()
 
         assert brain.vector_memory.store_semantic_rule.called
         kwargs = brain.vector_memory.store_semantic_rule.call_args.kwargs
@@ -599,7 +649,7 @@ class TestReflectionRuleFormatting:
 
         brain.vector_memory.get_trade_metadatas.return_value = loss_metas
 
-        brain._trigger_loss_reflection()
+        brain.trigger_loss_reflection()
 
         assert brain.vector_memory.store_semantic_rule.called
         kwargs = brain.vector_memory.store_semantic_rule.call_args.kwargs
@@ -635,7 +685,7 @@ class TestReflectionRuleFormatting:
         ]
         brain.vector_memory.get_trade_metadatas.return_value = loss_metas + win_metas
 
-        brain._trigger_loss_reflection()
+        brain.trigger_loss_reflection()
 
         assert brain.vector_memory.store_semantic_rule.call_args.kwargs["rule_id"] == (
             "rule_corrective_long_neutral_stop_loss_sl_hard_15m_tp_hard_15m"
@@ -660,7 +710,7 @@ class TestReflectionRuleFormatting:
 
         brain.vector_memory.get_trade_metadatas.return_value = mistake_metas
 
-        brain._trigger_ai_mistake_reflection()
+        brain.trigger_ai_mistake_reflection()
 
         assert brain.vector_memory.store_semantic_rule.called
         kwargs = brain.vector_memory.store_semantic_rule.call_args.kwargs
@@ -687,11 +737,11 @@ class TestReflectionRuleFormatting:
 
         brain.vector_memory.get_trade_metadatas.return_value = loss_metas
 
-        brain._trigger_loss_reflection()
+        brain.trigger_loss_reflection()
         first_id = brain.vector_memory.store_semantic_rule.call_args.kwargs["rule_id"]
 
         brain.vector_memory.store_semantic_rule.reset_mock()
-        brain._trigger_loss_reflection()
+        brain.trigger_loss_reflection()
         second_id = brain.vector_memory.store_semantic_rule.call_args.kwargs["rule_id"]
 
         assert first_id == second_id
@@ -707,11 +757,11 @@ class TestReflectionRuleFormatting:
 
         brain.vector_memory.get_trade_metadatas.return_value = win_metas
 
-        brain._trigger_reflection()
+        brain.trigger_reflection()
         first_id = brain.vector_memory.store_semantic_rule.call_args.kwargs["rule_id"]
 
         brain.vector_memory.store_semantic_rule.reset_mock()
-        brain._trigger_reflection()
+        brain.trigger_reflection()
         second_id = brain.vector_memory.store_semantic_rule.call_args.kwargs["rule_id"]
 
         assert first_id == second_id

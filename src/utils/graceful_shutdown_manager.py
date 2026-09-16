@@ -30,11 +30,27 @@ class GracefulShutdownManager:
         self.confirmation_callback = confirmation_callback
         self._callbacks = []
         self._shutting_down = False
+        self._reload_requested = False
 
     @property
     def is_shutting_down(self) -> bool:
         """Return whether graceful shutdown is already in progress."""
         return self._shutting_down
+
+    @property
+    def reload_requested(self) -> bool:
+        """Return whether the shutdown was requested as an in-place reload."""
+        return self._reload_requested
+
+    def request_reload(self) -> bool:
+        """Mark this shutdown as an in-place reload (the launcher restarts the bot).
+
+        Returns False when shutdown already started - a reload must not hijack it.
+        """
+        if self._shutting_down:
+            return False
+        self._reload_requested = True
+        return True
 
     def setup_signal_handlers(self):
         if sys.platform == "win32":
@@ -159,7 +175,7 @@ class GracefulShutdownManager:
         #    chart export spawns a subprocess that leaks a BaseSubprocessTransport
         #    on Python 3.13+).
         try:
-            import kaleido as _kl  # type: ignore[import-untyped]
+            import kaleido as _kl
 
             _kl.stop_sync_server(silence_warnings=True)
             if self.logger:
@@ -167,10 +183,8 @@ class GracefulShutdownManager:
         except (ImportError, AttributeError, Exception):  # noqa: S110, BLE001
             pass
 
-        # 2) Run the event loop a few extra iterations so pending transport
-        #    __del__ callbacks (aiohttp, kaleido subprocess, chromadb) are
-        #    drained before the loop is closed. This avoids
-        #    _ProactorBasePipeTransport / BaseSubprocessTransport ResourceWarning.
+        # 2) pump the loop so pending transport __del__ callbacks drain before close;
+        #    avoids _ProactorBasePipeTransport / BaseSubprocessTransport ResourceWarning
         try:
             for _ in range(5):
                 self.loop.call_soon(lambda: None)

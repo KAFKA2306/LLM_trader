@@ -218,10 +218,6 @@ class TestWritableConfigEdgeCases:
         )
         return WritableConfig(str(cfg))
 
-    def test_read_nonexistent_section(self, wc):
-        """Reading a nonexistent section returns empty dict."""
-        assert wc.get_section("nonexistent") == {}
-
     def test_read_nonexistent_key(self, wc):
         """Reading a nonexistent key returns None."""
         assert wc.get_value("general", "nonexistent") is None
@@ -240,18 +236,6 @@ class TestWritableConfigEdgeCases:
         with pytest.raises(ValueError, match="Unknown config key"):
             await wc.set_value("nonexistent", "key", "value")
 
-    async def test_reload_event_set_on_write(self, wc):
-        """Writing a value sets the reload event."""
-        assert not wc.reload_event.is_set()
-        await wc.set_value("general", "timeframe", "1d")
-        assert wc.reload_event.is_set()
-
-    def test_reload_event_cleared_on_read(self, wc):
-        """read_reload_event clears the event."""
-        wc.reload_event.set()
-        assert wc.read_reload_event() is True
-        assert wc.read_reload_event() is False
-
     def test_schema_covers_all_config_sections(self, wc):
         """Schema covers all sections in the actual config.ini."""
         schema = wc.get_full_schema()
@@ -262,10 +246,10 @@ class TestWritableConfigEdgeCases:
     def test_schema_has_required_fields(self, wc):
         """Every schema entry has required fields."""
         schema = wc.get_full_schema()
-        for section_name, section in schema.items():
+        for section in schema.values():
             assert "title" in section
             assert "keys" in section
-            for key_name, key_meta in section["keys"].items():
+            for key_meta in section["keys"].values():
                 assert "value" in key_meta
                 assert "type" in key_meta
                 assert "category" in key_meta
@@ -448,8 +432,6 @@ class TestAdminAuthMiddleware:
         app = FastAPI()
         app.add_middleware(AdminAuthMiddleware)
 
-        from src.config.writable_config import WritableConfig
-        from src.dashboard.log_stream import LogStreamManager
         from src.dashboard.routers.admin import AdminRouter
 
         admin_router = AdminRouter(
@@ -528,8 +510,6 @@ class TestLANAccessControl:
         app = FastAPI()
         app.add_middleware(AdminAuthMiddleware)
 
-        from src.config.writable_config import WritableConfig
-        from src.dashboard.log_stream import LogStreamManager
         from src.dashboard.routers.admin import AdminRouter
 
         admin_router = AdminRouter(

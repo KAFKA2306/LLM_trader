@@ -6,7 +6,7 @@ Extracted from TradingStrategy to reduce SRP violation (was 1151 lines / 19 meth
 from __future__ import annotations
 
 import math
-import re
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from src.utils.indicator_classifier import (
@@ -17,30 +17,13 @@ from src.utils.indicator_classifier import (
     classify_rsi_label,
     classify_volatility_level,
     classify_volume_state,
+    resolve_scalar,
 )
 
 from .data_models import MarketConditions, Position
 
 if TYPE_CHECKING:
     from src.logger.logger import Logger
-
-
-def _resolve_scalar(value: Any, default: float = 0.0) -> float:
-    """Extract scalar float from potentially array-like value (numpy, list)."""
-    if value is None:
-        return default
-    if isinstance(value, (int, float)):
-        return float(value)
-    try:
-        return float(value)  # numpy scalar
-    except (TypeError, ValueError):
-        pass
-    try:
-        if len(value) > 0:
-            return float(value[-1])
-        return default
-    except (TypeError, ValueError):
-        return default
 
 
 class MarketConditionsExtractor:
@@ -134,13 +117,13 @@ class MarketConditionsExtractor:
                 conditions["volatility"] = classify_volatility_level({"atr_percent": atr_pct})
 
                 # --- NEW: enriched indicators for vector DB learning (July 2026) ---
-                conditions["vwap"] = _resolve_scalar(tech_data.get("vwap"), 0.0)
-                conditions["mfi"] = _resolve_scalar(tech_data.get("mfi"), 50.0)
-                conditions["cmf"] = _resolve_scalar(tech_data.get("cmf"), 0.0)
-                conditions["bb_percent_b"] = _resolve_scalar(tech_data.get("bb_percent_b"), 0.5)
-                conditions["chandelier_long"] = _resolve_scalar(tech_data.get("chandelier_long"), 0.0)
-                conditions["pfe"] = _resolve_scalar(tech_data.get("pfe"), 0.0)
-                st_dir = _resolve_scalar(tech_data.get("supertrend_direction"), 0.0)
+                conditions["vwap"] = resolve_scalar(tech_data.get("vwap"), 0.0)
+                conditions["mfi"] = resolve_scalar(tech_data.get("mfi"), 50.0)
+                conditions["cmf"] = resolve_scalar(tech_data.get("cmf"), 0.0)
+                conditions["bb_percent_b"] = resolve_scalar(tech_data.get("bb_percent_b"), 0.5)
+                conditions["chandelier_long"] = resolve_scalar(tech_data.get("chandelier_long"), 0.0)
+                conditions["pfe"] = resolve_scalar(tech_data.get("pfe"), 0.0)
+                st_dir = resolve_scalar(tech_data.get("supertrend_direction"), 0.0)
                 conditions["supertrend_direction"] = (
                     "Bullish" if st_dir > 0 else "Bearish" if st_dir < 0 else "NEUTRAL"
                 )
@@ -157,34 +140,11 @@ class MarketConditionsExtractor:
             conditions["market_sentiment"] = classify_market_sentiment(sentiment_data)
             conditions["fear_greed_index"] = sentiment_data.get("fear_greed_index", 50) if sentiment_data else 50
             conditions["order_book_bias"] = classify_order_book_bias(microstructure_data)
+            conditions["is_weekend"] = datetime.now(timezone.utc).weekday() >= 5
 
             # Social sentiment from Reddit (injected by app.py)
             conditions["social_sentiment_reddit"] = result.get("_social_sentiment_reddit", "NEUTRAL")
             conditions["portfolio_pnl_pct"] = float(result.get("_portfolio_pnl_pct", 0.0))
-
-            # Fallback: extract trend direction from raw response signal
-            raw_response = result.get("raw_response", "").lower()
-            if not conditions.get("trend_direction"):
-                signal_match = re.search(
-                    r'signal["\s:]*\[?(BUY|SELL|HOLD|CLOSE)\b', raw_response, re.IGNORECASE
-                )
-                if signal_match:
-                    signal_word = signal_match.group(1).upper()
-                    if signal_word == "BUY":
-                        conditions["trend_direction"] = "BULLISH"
-                    elif signal_word == "SELL":
-                        conditions["trend_direction"] = "BEARISH"
-                    else:
-                        conditions["trend_direction"] = "NEUTRAL"
-                else:
-                    bullish_hits = len(re.findall(r"\b(bullish|uptrend)\b", raw_response))
-                    bearish_hits = len(re.findall(r"\b(bearish|downtrend)\b", raw_response))
-                    if bullish_hits > bearish_hits:
-                        conditions["trend_direction"] = "BULLISH"
-                    elif bearish_hits > bullish_hits:
-                        conditions["trend_direction"] = "BEARISH"
-                    else:
-                        conditions["trend_direction"] = "NEUTRAL"
         except Exception as e:  # noqa: BLE001
             self.logger.warning("Could not extract market conditions: %s", e)
 
@@ -238,23 +198,9 @@ class MarketConditionsExtractor:
 
     @staticmethod
     def build_conditions_from_position(position: Position) -> MarketConditions:
-        """Reconstruct market conditions from Position's stored entry fields.
+        """Return the position's entry-time market snapshot.
 
         Used when closing via SL/TP hit where no fresh analysis is available.
         """
-        rsi = position.rsi_at_entry
-        rsi_level = classify_rsi_label(rsi)
-
-        return MarketConditions(
-            trend_direction=position.trend_direction_at_entry,
-            adx=position.adx_at_entry,
-            rsi=rsi,
-            rsi_level=rsi_level,
-            volatility=position.volatility_level,
-            macd_signal=position.macd_signal_at_entry,
-            bb_position=position.bb_position_at_entry,
-            volume_state=position.volume_state_at_entry,
-            market_sentiment=position.market_sentiment_at_entry,
-            order_book_bias=position.order_book_bias_at_entry,
-        )
+        return position.conditions_at_entry
 

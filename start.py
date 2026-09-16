@@ -73,6 +73,7 @@ from src.notifiers import ConsoleNotifier, DiscordNotifier
 from src.parsing.unified_parser import UnifiedParser
 from src.platforms.ai_providers import (
     BlockRunClient,
+    DeepSeekClient,
     GoogleAIClient,
     LMStudioClient,
     OpenRouterClient,
@@ -93,7 +94,6 @@ from src.rag import (
     TickerManager,
 )
 from src.rag.article_processor import ArticleProcessor
-from src.rag.code_vector_index import CodebaseVectorIndexer
 from src.rag.collision_resolver import CategoryCollisionResolver
 from src.rag.local_taxonomy import LocalTaxonomyProvider
 from src.rag.market_components import (
@@ -115,13 +115,11 @@ from src.trading import (
     TradingStatisticsService,
     TradingStrategy,
 )
-from src.trading.audit import AuditTrail
 from src.trading.guards.configured_symbol import ConfiguredSymbolGuard
 from src.trading.guards.cooldown_window import CooldownWindowGuard
 from src.trading.guards.max_position_size import MaxPositionSizeGuard
 from src.trading.guards.pipeline import GuardPipeline
 from src.trading.post_mortem import PostMortemService
-from src.trading.rl_policy import RLPolicyNetwork
 from src.trading.stop_loss_tightening_policy import StopLossTighteningPolicy
 from src.trading.vector_memory import VectorMemoryService
 from src.utils.format_utils import FormatUtils
@@ -333,29 +331,47 @@ def _show_error_dialog(title: str, message: str) -> bool:
 
 
 def build_startup_banner(project_root: Path) -> Panel:
-    """Styled 'LLM TRADER' banner using rich panel + unicode block drawing."""
-    text = Text()
-
-    logo_lines = [
-        "   ██         ██         ██      ██   ",
-        "   ██         ██         ████  ████   ",
-        "   ██         ██         ██ ████ ██   ",
-        "   ██         ██         ██  ██  ██   ",
-        "   ██         ██         ██      ██   ",
-        "   ████████   ████████   ██      ██   ",
+    """Styled 'LLM TRADER v1.1' banner using rich panel + unicode block drawing."""
+    logo_llm = [
+        "██╗     ██╗     ███╗   ███╗",
+        "██║     ██║     ████╗ ████║",
+        "██║     ██║     ██╔████╔██║",
+        "██║     ██║     ██║╚██╔╝██║",
+        "███████╗███████╗██║ ╚═╝ ██║",
+        "╚══════╝╚══════╝╚═╝     ╚═╝",
     ]
-    for line in logo_lines:
-        text.append("║", style="bright_blue")
-        text.append(line, style="bright_cyan")
-        text.append("║\n", style="bright_blue")
+    logo_trader = [
+        "████████╗██████╗  █████╗ ██████╗ ███████╗██████╗ ",
+        "╚══██╔══╝██╔══██╗██╔══██╗██╔══██╗██╔════╝██╔══██╗",
+        "   ██║   ██████╔╝███████║██║  ██║█████╗  ██████╔╝",
+        "   ██║   ██╔══██╗██╔══██║██║  ██║██╔══╝  ██╔══██╗",
+        "   ██║   ██║  ██║██║  ██║██████╔╝███████╗██║  ██║",
+        "   ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚══════╝╚═╝  ╚═╝",
+    ]
+    logo_version = [
+        "██╗   ██╗ ██╗   ██╗",
+        "██║   ██║███║  ███║",
+        "██║   ██║╚██║  ╚██║",
+        "╚██╗ ██╔╝ ██║   ██║",
+        " ╚████╔╝  ██║██╗██║",
+        "  ╚═══╝   ╚═╝╚═╝╚═╝",
+    ]
+    canvas_width = max(len(line) for line in [*logo_llm, *logo_trader, *logo_version])
 
+    text = Text()
+    for line in logo_llm:
+        text.append(line.center(canvas_width) + "\n", style="bold bright_cyan")
     text.append("\n")
-    text.append("        AI-Powered Crypto Trading Bot\n", style="bold yellow")
-    text.append("        ────────────────────────────\n", style="dim white")
-    text.append(
-        f"        {project_root.resolve()}\n",
-        style="dim cyan",
-    )
+    for line in logo_trader:
+        text.append(line.center(canvas_width) + "\n", style="bold bright_cyan")
+    text.append("\n")
+    for line in logo_version:
+        text.append(line.center(canvas_width) + "\n", style="bold bright_yellow")
+    text.append("\n")
+    tagline = "AI-Powered Crypto Trading Bot"
+    text.append(tagline.center(canvas_width) + "\n", style="bold yellow")
+    text.append(("─" * len(tagline)).center(canvas_width) + "\n", style="dim white")
+    text.append(str(project_root.resolve()).center(canvas_width) + "\n", style="dim cyan")
 
     return Panel(
         Align.center(text),
@@ -390,6 +406,11 @@ def print_summary_table(
     console.print(Panel(table, border_style="green"))
 
 
+# Exit code the launcher scripts (scripts/start_script_*.ps1) interpret as
+# "restart the bot in place" - set when the user requests a reload with SHIFT+R.
+RELOAD_EXIT_CODE = 42
+
+
 class CompositionRoot:
     """Composition Root for the trading bot application.
 
@@ -406,7 +427,7 @@ class CompositionRoot:
         )
         self.logger.install_crash_handler()
         self.loop = None
-        self.shutdown_manager = None
+        self.shutdown_manager: GracefulShutdownManager | None = None
 
     # pylint: disable=too-many-statements
     async def build_dependencies(self) -> dict:
@@ -529,10 +550,6 @@ class CompositionRoot:
             "sentiment_analyst": RedditSentimentAnalyst(
                 logger=self.logger,
             ),
-            "rl_policy": RLPolicyNetwork(
-                config=self.config,
-                logger=self.logger,
-            ),
             "ev_formatter": analyzer["ev_formatter"],
             "executor_handler": ExecutorHandler(
                 persistence=trading["persistence"],
@@ -561,7 +578,7 @@ class CompositionRoot:
         os.makedirs(brain_dir, exist_ok=True)
 
     async def _run_maintenance_tasks(self, brain_service: TradingBrainService) -> None:
-        """Run post-provisioning maintenance: journal rotation & codebase vector index."""
+        """Run post-provisioning maintenance: journal rotation."""
         try:
             rotated_count = JournalRotator().rotate_all_journals()
             if rotated_count > 0:
@@ -575,43 +592,6 @@ class CompositionRoot:
                 )
         except Exception as e:  # noqa: BLE001
             self.logger.warning("Journal rotation maintenance skipped: %s", e)
-
-        if self.config.CODEBASE_INDEX_ENABLED:
-            try:
-                index_dir = self.config.CODEBASE_INDEX_DIR
-                os.makedirs(index_dir, exist_ok=True)
-                codebase_client = chromadb.PersistentClient(path=index_dir)
-                codebase_indexer = CodebaseVectorIndexer(
-                    logger=self.logger,
-                    chroma_client=codebase_client,
-                    embedding_model=brain_service.vector_memory.embedding_model,
-                    project_root=Path.cwd(),
-                )
-                self.logger.info("  -> Verifying codebase vector index embeddings...")
-                result = await asyncio.wait_for(
-                    asyncio.to_thread(codebase_indexer.index_codebase),
-                    timeout=10.0,
-                )
-                if result["indexed"] > 0:
-                    self.logger.info(
-                        "  -> Codebase vector index updated: %d files indexed, %d total chunks",
-                        result["indexed"],
-                        result["total_chunks"],
-                    )
-                else:
-                    self.logger.info(
-                        "  -> Codebase vector index up-to-date: %d files verified, %d chunks ready",
-                        result["skipped"],
-                        result["total_chunks"],
-                    )
-            except TimeoutError:
-                self.logger.info(
-                    "  -> Codebase vector index check deferred (startup prioritized)"
-                )
-            except Exception as e:  # noqa: BLE001
-                self.logger.warning("Codebase vector indexing skipped: %s", e)
-        else:
-            self.logger.info("  -> Codebase vector index disabled in config.ini")
 
     async def _provision_infrastructure(self) -> dict:
         """Provision base infrastructure components."""
@@ -748,14 +728,12 @@ class CompositionRoot:
         )
 
         category_processor = CategoryProcessor(
-            self.logger, utils["collision_resolver"], file_handler
+            self.logger, utils["collision_resolver"], utils["parser"], file_handler
         )
         engine = RagEngine(
             logger=self.logger,
-            token_counter=utils["token_counter"],
             config=self.config,
             coingecko_api=apis["coingecko"],
-            file_handler=file_handler,
             news_manager=news_manager,
             market_data_manager=data_manager,
             index_manager=IndexManager(self.logger, article_processor),
@@ -809,6 +787,14 @@ class CompositionRoot:
                 logger=self.logger,
             )
             self.logger.debug("OpenRouter client initialized")
+        deepseek_client: DeepSeekClient | None = None
+        if self.config.DEEPSEEK_API_KEY:
+            deepseek_client = DeepSeekClient(
+                api_key=self.config.DEEPSEEK_API_KEY,
+                base_url=self.config.DEEPSEEK_BASE_URL,
+                logger=self.logger,
+            )
+            self.logger.debug("DeepSeek client initialized")
         lmstudio_client: LMStudioClient | None = None
         if self.config.LM_STUDIO_BASE_URL:
             lmstudio_client = LMStudioClient(
@@ -833,6 +819,7 @@ class CompositionRoot:
             openrouter=openrouter_client,
             lmstudio=lmstudio_client,
             blockrun=blockrun_client,
+            deepseek=deepseek_client,
         )
         orchestrator = ProviderOrchestrator(self.logger, self.config, provider_clients)
 
@@ -846,7 +833,7 @@ class CompositionRoot:
             orchestrator=orchestrator,
             provider_clients=provider_clients,
         )
-        primary_provider = getattr(self.config, "AI_PROVIDER", "googleai")
+        primary_provider = self.config.PROVIDER
         self.logger.info(
             "  -> AI Provider fallback chain ready (Primary provider: %s)",
             primary_provider,
@@ -1016,7 +1003,6 @@ class CompositionRoot:
         statistics_service = TradingStatisticsService(self.logger, persistence)
         exit_monitor = ExitMonitor(self.config, timeframe, POSITION_UPDATE_INTERVAL)
         exit_monitor.validate()
-        audit_trail = AuditTrail()
         guard_pipeline = GuardPipeline(
             [
                 ConfiguredSymbolGuard(),
@@ -1043,11 +1029,10 @@ class CompositionRoot:
             memory_service,
             risk_manager,
             self.config,
-            PositionExtractor(self.logger, utils["parser"]),
+            PositionExtractor(),
             conditions_extractor=MarketConditionsExtractor(self.logger),
             tightening_policy=tightening_policy,
             guard_pipeline=guard_pipeline,
-            audit_trail=audit_trail,
             post_mortem_service=post_mortem_service,
         )
 
@@ -1088,7 +1073,7 @@ class CompositionRoot:
                     cleanup_interval=7200,
                 )
 
-                notifier = DiscordNotifier(  # type: ignore[reportAbstractUsage]
+                notifier = DiscordNotifier(
                     self.logger,
                     self.config,
                     utils["parser"],
@@ -1138,7 +1123,7 @@ class CompositionRoot:
         summary_stats = {
             "Symbols mapped": f"{symbols_count:,}",
             "News articles indexed": f"{news_count:,}",
-            "Primary AI provider": str(getattr(self.config, "AI_PROVIDER", "googleai")),
+            "Primary AI provider": str(self.config.PROVIDER),
             "Vector memory active": "ChromaDB (bge-base-en-v1.5)",
             "Order guard rules": f"{guards_count}",
             "Trading pair / TF": f"{self.config.CRYPTO_PAIR} ({self.config.TIMEFRAME})",
@@ -1149,7 +1134,8 @@ class CompositionRoot:
         self.console.print()
         self.console.print(
             "  [dim]Keyboard commands:[/] [bold]'a'[/] force analysis  "
-            "[bold]'d'[/] toggle dashboard  [bold]'h'[/] help  [bold]'q'[/] quit",
+            "[bold]'d'[/] toggle dashboard  [bold]'h'[/] help  [bold]'q'[/] quit  "
+            "[bold]'Shift+R'[/] reload",
         )
         self.console.print(
             f"  [bold green]Dashboard →[/] [link={dashboard_url}]{dashboard_url}[/]"
@@ -1241,7 +1227,7 @@ class CompositionRoot:
                 active_tasks=bot.active_tasks,
                 is_running=lambda: bot.running,
                 fetch_current_ticker=bot.fetch_current_ticker,
-                interruptible_sleep=bot.interruptible_sleep,  # type: ignore[reportAttributeAccessIssue]
+                interruptible_sleep=bot.interruptible_sleep,
                 get_symbol=lambda: bot.current_symbol,
             )
 
@@ -1291,6 +1277,12 @@ class CompositionRoot:
             elif not self.config.DASHBOARD_ENABLED:
                 self.logger.info("Dashboard disabled (config). Press 'd' to start it.")
 
+            # Ctrl+C path: the KeyboardInterrupt skips this coroutine's finally,
+            # so the shutdown manager must stop the dashboard explicitly
+            # (uvicorn no longer captures SIGINT itself).
+            if dashboard_server and self.shutdown_manager:
+                self.shutdown_manager.register_shutdown_callback(dashboard_server.stop)
+
             await bot.run(symbol, timeframe)
 
         except asyncio.CancelledError:
@@ -1299,8 +1291,12 @@ class CompositionRoot:
             if dashboard_server:
                 await dashboard_server.stop()
 
-    def start(self):
-        """Main entry point with clean shutdown delegation."""
+    def start(self) -> int:
+        """Main entry point with clean shutdown delegation.
+
+        Returns the process exit code: RELOAD_EXIT_CODE when the user requested
+        an in-place reload (SHIFT+R), 0 otherwise.
+        """
         single_instance_lock = SingleInstanceLock(logger=self.logger)
 
         if not single_instance_lock.acquire():
@@ -1330,6 +1326,7 @@ class CompositionRoot:
         )
         self.shutdown_manager.setup_signal_handlers()
 
+        exit_code = 0
         try:
             while True:
                 try:
@@ -1352,6 +1349,21 @@ class CompositionRoot:
                         self.shutdown_manager.shutdown_gracefully()
                     )
                     break
+
+            # In-place reload (keyboard 'R'): finish the full graceful shutdown
+            # here - awaited to completion, like the Ctrl+C path - then exit with
+            # the reload code so the launcher restarts the bot.
+            if self.shutdown_manager.reload_requested:
+                self.logger.info(
+                    "Reload requested - completing graceful shutdown for in-place restart..."
+                )
+                try:
+                    self.loop.run_until_complete(
+                        self.shutdown_manager.shutdown_gracefully()
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    self.logger.error("Error during reload shutdown: %s", exc)
+                exit_code = RELOAD_EXIT_CODE
         finally:
             # Give any remaining threads time to clean up before closing the loop
             # This prevents RuntimeError when Discord or other background threads try to access the closed loop
@@ -1361,10 +1373,12 @@ class CompositionRoot:
             except Exception as e:  # noqa: BLE001
                 self.logger.error("Error closing event loop: %s", e)
 
+        return exit_code
+
 
 if __name__ == "__main__":
     try:
-        CompositionRoot().start()
+        exit_code = CompositionRoot().start()
     except BaseException:
         import traceback
 
@@ -1379,3 +1393,4 @@ if __name__ == "__main__":
         except (EOFError, KeyboardInterrupt):
             pass
         raise
+    sys.exit(exit_code)

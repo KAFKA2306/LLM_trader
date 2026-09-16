@@ -5,13 +5,11 @@ Provides functionality for rag.rag_engine.py.
 from __future__ import annotations
 
 import asyncio
-import re
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
 from src.logger.logger import Logger
 from src.utils.profiler import profile_performance
-from src.utils.token_counter import TokenCounter
 
 if TYPE_CHECKING:
     from src.config.loader import Config
@@ -22,10 +20,8 @@ class RagEngine:
     def __init__(
         self,
         logger: Logger,
-        token_counter: TokenCounter,
         config: Config,
         coingecko_api: CoinGeckoAPI | None = None,
-        file_handler=None,
         news_manager=None,
         market_data_manager=None,
         index_manager=None,
@@ -38,10 +34,8 @@ class RagEngine:
 
         Args:
             logger: Logger instance
-            token_counter: TokenCounter instance
             config: Config instance for RAG update intervals
             coingecko_api: CoinGecko API client (optional)
-            file_handler: RagFileHandler instance (injected from app.py)
             news_manager: NewsManager instance (injected from app.py)
             market_data_manager: MarketDataManager instance (injected from app.py)
             index_manager: IndexManager instance (injected from app.py)
@@ -54,10 +48,8 @@ class RagEngine:
 
         self.logger = logger
         self.config = config
-        self.token_counter = token_counter
 
         # Store injected components
-        self.file_handler = file_handler
         self.news_manager = news_manager
         self.market_data_manager = market_data_manager
         self.index_manager = index_manager
@@ -108,15 +100,23 @@ class RagEngine:
                 self.last_update = datetime.now(timezone.utc)
         except Exception:
             self.logger.exception("Error initializing RAG engine")
-            self.news_manager.clear_database()  # type: ignore
 
     def _build_indices(self) -> None:
         """Build search indices from news database"""
         self.index_manager.build_indices(  # type: ignore
             self.news_manager.news_database,  # type: ignore
             self.ticker_manager.get_known_tickers(),  # type: ignore
-            self.category_processor.category_word_map  # type: ignore
         )
+
+    async def _refresh_market_knowledge(self) -> bool:
+        """Refresh market data and stamp the update time; False when the refresh fails."""
+        try:
+            await self.refresh_market_data()
+            self.last_update = datetime.now(timezone.utc)
+            return True
+        except Exception as e:  # noqa: BLE001
+            self.logger.error("Failed to update market knowledge: %s", e)
+            return False
 
     async def update_if_needed(self, force_update: bool = False) -> bool:
         """Update market data if needed based on time intervals or forced update"""
@@ -124,25 +124,13 @@ class RagEngine:
         async with self._update_lock:
             if not self.last_update:
                 self.logger.debug("No previous update, refreshing market knowledge base")
-                try:
-                    await self.refresh_market_data()
-                    self.last_update = datetime.now(timezone.utc)
-                    return True
-                except Exception as e:  # noqa: BLE001
-                    self.logger.error("Failed to update market knowledge: %s", e)
-                    return False
+                return await self._refresh_market_knowledge()
 
             time_since_update = datetime.now(timezone.utc) - self.last_update
             if force_update or time_since_update > self.update_interval:
                 reason = "forced update" if force_update else f"{time_since_update.total_seconds()/60:.1f} minutes since last update"
                 self.logger.debug("Refreshing market knowledge: %s", reason)
-                try:
-                    await self.refresh_market_data()
-                    self.last_update = datetime.now(timezone.utc)
-                    return True
-                except Exception as e:  # noqa: BLE001
-                    self.logger.error("Failed to update market knowledge: %s", e)
-                    return False
+                return await self._refresh_market_knowledge()
 
             try:
                 categories_updated = await self._ensure_categories_updated()
@@ -163,7 +151,7 @@ class RagEngine:
             return_exceptions=True
         )
 
-        # Process articles if any were fetched (gather converts exceptions to values with return_exceptions=True)
+        # gather(return_exceptions=True): failures arrive as values - filter here
         if isinstance(articles, list) and articles:
             # update_news_database does sync JSON file I/O — keep it off the event loop
             updated = await asyncio.to_thread(self.news_manager.update_news_database, articles)  # type: ignore
@@ -203,11 +191,6 @@ class RagEngine:
             resolved_max_tokens = self.config.RAG_ARTICLE_MAX_TOKENS * resolved_k
 
         return resolved_k, resolved_max_tokens
-
-    @staticmethod
-    def _extract_query_keywords(query: str) -> set[str]:
-        """Extract query keywords used by context selection heuristics."""
-        return set(re.findall(r"\b\w{3,15}\b", query.lower()))
 
     def _expand_candidate_indices_for_symbol(
         self,
@@ -283,12 +266,9 @@ class RagEngine:
                 else:
                     self.logger.debug("Skipping redundant retrieve-path update — last attempt was within backoff window")
 
-            keywords = self._extract_query_keywords(query)
-
             # Use context builder for keyword search
             scores = await self.context_builder.keyword_search(  # type: ignore
                 query, self.news_manager.news_database, symbol,  # type: ignore
-                self.index_manager.get_coin_indices(),  # type: ignore
                 self.category_processor.category_word_map,  # type: ignore
                 self.category_processor.important_categories  # type: ignore
             )
@@ -298,9 +278,9 @@ class RagEngine:
             relevant_indices = self._expand_candidate_indices_for_symbol(symbol, k, relevant_indices)
             relevant_indices = self._prioritize_full_body_candidates(relevant_indices)
 
-            # Build context using context builder (pass keywords and scores for smart selection)
+            # Build context using context builder (scores drive candidate selection)
             context_text, total_tokens = self.context_builder.add_articles_to_context(  # type: ignore
-                relevant_indices, self.news_manager.news_database, max_tokens, k, keywords, scores_dict  # type: ignore
+                relevant_indices, self.news_manager.news_database, max_tokens, k, scores_dict  # type: ignore
             )
             self._latest_article_urls = self.context_builder.get_latest_article_urls()  # type: ignore
             self.logger.debug("Retrieved context with %s tokens", total_tokens)
