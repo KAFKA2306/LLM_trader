@@ -144,6 +144,7 @@ class PositionManagementMixin:
                 take_profit=take_profit,
                 fee=0.0,
                 reasoning=f"Updated position parameters. {reasoning}",
+                order_id=f"update-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}",
             )
             await self._record_trade_decision(decision)
             self.logger.info("Position updated: New SL=$%s, TP=$%s",
