@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 
 
 ACTIONABLE_SIGNALS = frozenset({"BUY", "SELL", "CLOSE", "UPDATE", "LONG", "SHORT"})
+SIGNAL_ALIASES = {"CLOSE_LONG": "CLOSE", "CLOSE_SHORT": "CLOSE"}
 EXECUTOR_HTTP_TIMEOUT = 5.0
 DEAD_LETTER_PATH = Path("data/trading/failed_forwards.jsonl")
 
@@ -123,7 +124,8 @@ class ExecutorHandler:
             return None
         if strategy_decision is None:
             return None
-        signal = analysis.get("signal")
+        signal = str(analysis.get("signal") or "").upper()
+        signal = SIGNAL_ALIASES.get(signal, signal)
         if signal not in ACTIONABLE_SIGNALS:
             return None
         if strategy_decision.action == "HOLD":
@@ -174,10 +176,9 @@ class ExecutorHandler:
                 return val != 0
             return str(val).strip().lower() in ("true", "1", "yes", "on")
 
+        now = datetime.now(timezone.utc)
         return {
-            "timestamp": datetime.now(timezone.utc).strftime(
-                "%Y-%m-%dT%H:%M:%S.%f"
-            ),
+            "timestamp": now.strftime("%Y-%m-%dT%H:%M:%S.%f"),
             "symbol": str(symbol),
             "signal": str(signal),
             "order_type": str(self._config.ENTRY_ORDER_TYPE),
