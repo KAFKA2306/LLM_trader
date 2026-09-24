@@ -9,8 +9,10 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import tempfile
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -18,11 +20,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.parsing.unified_parser import UnifiedParser
-from src.trading.data_models import MarketConditions, Position
+from src.trading.data_models import Position
 from src.trading.exit_monitor import ExitMonitor
 from src.trading.guards import GuardResult
 from src.trading.guards.configured_symbol import ConfiguredSymbolGuard
-from src.trading.guards.cooldown_window import CooldownWindowGuard
 from src.trading.guards.max_position_size import MaxPositionSizeGuard
 from src.trading.guards.pipeline import GuardPipeline
 from src.trading.market_conditions_extractor import MarketConditionsExtractor
@@ -30,7 +31,7 @@ from src.trading.order_lifecycle import OrderIntent, OrderLifecycle
 from src.trading.position_extractor import PositionExtractor
 from src.trading.position_status_monitor import PositionStatusMonitor
 from src.trading.stop_loss_tightening_policy import StopLossTighteningPolicy
-from src.trading.trading_strategy import TradingStrategy
+from src.trading.trading_strategy import LocalExitRequest, TradingStrategy
 from src.utils.format_utils import FormatUtils
 from tests.conftest import (
     make_config,
@@ -51,18 +52,12 @@ EXTRACTOR = PositionExtractor()
 
 
 class GuardDouble:
-    """Guard double that counts the cache invalidations the pipeline requests."""
+    """Guard double that always passes, used to exercise the pipeline order."""
 
     name = "guard"
 
-    def __init__(self) -> None:
-        self.invalidations = 0
-
     def check(self, order: OrderIntent, /, *, capital: float, config: Any) -> GuardResult:
         return GuardResult(guard_name=self.name, passed=True, reason="passed", metadata={})
-
-    def invalidate_cache(self) -> None:
-        self.invalidations += 1
 
 
 class PassingGuard(GuardDouble):
@@ -74,10 +69,6 @@ class RejectingGuard(GuardDouble):
 
     def check(self, order: OrderIntent, /, *, capital: float, config: Any) -> GuardResult:
         return GuardResult(guard_name=self.name, passed=False, reason="blocked by test guard")
-
-
-class CooldownGuardDouble(GuardDouble):
-    name = "cooldown_window"
 
 
 class FaultyGuard(GuardDouble):
@@ -108,6 +99,25 @@ class RecordingExitStrategy:
     async def check_take_profit(self, current_price: float) -> str | None:
         self.calls.append(("check_take_profit", current_price))
         return self.close_reason
+
+
+class LocalExitRequestStrategy(RecordingExitStrategy):
+    """Exit-strategy double reporting an UNBOOKED local exit request (wave 3).
+
+    It mimics the real strategy after wave 3: the bracket fires, ``check_stop_loss``
+    returns None (nothing was booked) and the unbooked condition is exposed through
+    ``take_local_exit_request``.
+    """
+
+    def __init__(self, request: LocalExitRequest | None = None) -> None:
+        super().__init__(close_reason=None)
+        self._requests = [request] if request is not None else []
+        self.request_reads = 0
+
+    def take_local_exit_request(self) -> LocalExitRequest | None:
+        """One-shot read, like the real strategy."""
+        self.request_reads += 1
+        return self._requests.pop(0) if self._requests else None
 
 
 class MonitorPersistence:
@@ -180,7 +190,16 @@ def guard_strategy(
         statistics_service=statistics,
         memory_service=MagicMock(),
         risk_manager=risk_manager,
-        config=make_config(CRYPTO_PAIR=CONFIG_PAIR, TIMEFRAME="4h", **config_overrides),
+        config=make_config(
+            **{
+                "CRYPTO_PAIR": CONFIG_PAIR,
+                "TIMEFRAME": "4h",
+                "BOT_INTENT_JOURNAL_PATH": str(
+                    Path(tempfile.mkdtemp()) / "bot_position_intents.jsonl"
+                ),
+                **config_overrides,
+            }
+        ),
         position_extractor=mock_extractor(),
         guard_pipeline=pipeline,
     )
@@ -238,8 +257,13 @@ def exit_config(
     )
 
 
-def exit_strategy(direction: str = "LONG") -> TradingStrategy:
-    """TradingStrategy shell for the exit checks: real Position, mocked venue seams."""
+def exit_strategy(direction: str = "LONG", *, executor_api_enabled: bool = False) -> TradingStrategy:
+    """TradingStrategy shell for the exit checks: real Position, mocked venue seams.
+
+    Wave 3: the executor integration is OFF by default here, so a tripped bracket is
+    recorded as ``unknown`` and nothing may be booked — the config double carries an
+    isolated intent journal so no test writes into the repo's data directory.
+    """
     strategy = TradingStrategy.__new__(TradingStrategy)
     strategy.current_position = (
         long_position(stop_loss=95.0, take_profit=110.0)
@@ -248,10 +272,23 @@ def exit_strategy(direction: str = "LONG") -> TradingStrategy:
     )
     persistence = MagicMock()
     persistence.async_save_position = AsyncMock()
+    persistence.async_save_trade_decision = AsyncMock()
     strategy.persistence = persistence
     strategy.close_position = AsyncMock()
     strategy.logger = null_logger()
     strategy._conditions = MarketConditionsExtractor(null_logger())
+    strategy.statistics_service = MagicMock()
+    strategy._state_divergence = None
+    strategy._unconfirmed_intent_alert = None
+    strategy._local_exit_request = None
+    strategy._pending_local_close_decision = None
+    strategy.config = SimpleNamespace(
+        EXECUTOR_API_ENABLED=executor_api_enabled,
+        EXECUTOR_API_URL="http://127.0.0.1:9199/decision" if executor_api_enabled else "",
+        BOT_INTENT_JOURNAL_PATH=str(
+            Path(tempfile.mkdtemp()) / "bot_position_intents.jsonl"
+        ),
+    )
     return strategy
 
 
@@ -262,6 +299,7 @@ def monitor_context(
     is_running: Callable[[], bool] | None = None,
     fetch_current_ticker: Any = None,
     interruptible_sleep: Any = None,
+    manages_exits: Callable[[], bool] | None = None,
 ) -> SimpleNamespace:
     """PositionStatusMonitor wired to an in-memory monitor-state store."""
     config = exit_config()
@@ -280,6 +318,7 @@ def monitor_context(
         fetch_current_ticker=fetch_current_ticker or AsyncMock(return_value=None),
         interruptible_sleep=interruptible_sleep or noop_sleep,
         get_symbol=lambda: CONFIG_PAIR,
+        manages_exits=manages_exits,
     )
     return SimpleNamespace(
         config=config,
@@ -356,119 +395,6 @@ def test_guard_pipeline_stops_at_the_first_block(
     assert [result.guard_name for result in results] == expected_names
     assert [result.passed for result in results] == expected_passed
     assert [result.reason for result in results] == expected_reasons
-
-
-@pytest.mark.parametrize(
-    ("guard_classes", "expected_invalidations"),
-    [
-        pytest.param((), [], id="empty-pipeline"),
-        pytest.param((PassingGuard, RejectingGuard), [0, 0], id="no-cooldown-guard"),
-        pytest.param((PassingGuard, CooldownGuardDouble), [0, 1], id="cooldown-guard"),
-    ],
-)
-def test_invalidate_cooldown_cache_targets_only_the_cooldown_guard(
-    guard_classes: tuple[type, ...], expected_invalidations: list[int]
-) -> None:
-    """Invalidation reaches the cooldown guard only; any other pipeline is a silent no-op."""
-    guards = [guard_class() for guard_class in guard_classes]
-    pipeline = GuardPipeline(guards)
-
-    pipeline.invalidate_cooldown_cache()
-
-    assert [guard.invalidations for guard in guards] == expected_invalidations
-
-
-@pytest.mark.parametrize(
-    ("history", "expected_reason", "expected_metadata"),
-    [
-        pytest.param(
-            None,
-            "Cooldown guard is not wired with persistence (fail-closed)",
-            {"error": "persistence_not_configured"},
-            id="no-persistence",
-        ),
-        pytest.param(
-            RuntimeError("db unavailable"),
-            "Cooldown guard could not read execution history (fail-closed)",
-            {"error": "Cooldown guard could not read execution history"},
-            id="unreadable-history",
-        ),
-    ],
-)
-def test_cooldown_guard_fails_closed(
-    history: Exception | None, expected_reason: str, expected_metadata: dict[str, str]
-) -> None:
-    """An absent or failing history store blocks the order instead of allowing it."""
-    guard = CooldownWindowGuard()
-    if history is not None:
-        persistence = MagicMock()
-        persistence.get_last_execution_timestamp.side_effect = history
-        guard = CooldownWindowGuard(persistence=persistence)
-
-    result = guard.check(intent(), capital=CAPITAL, config=SimpleNamespace(TIMEFRAME="4h"))
-
-    assert result.passed is False
-    assert result.reason == expected_reason
-    assert result.metadata == expected_metadata
-
-
-@pytest.mark.parametrize(
-    ("timeframe", "elapsed_minutes", "expected_passed", "expected_cooldown"),
-    [
-        pytest.param("15m", 60.0, True, 60, id="scalping-4x-opens-exactly"),
-        pytest.param("15m", 59.9, False, 60, id="scalping-4x-one-tick-inside"),
-        pytest.param("1h", 180.0, True, 180, id="intraday-3x-opens-exactly"),
-        pytest.param("4h", 480.0, True, 480, id="swing-2x-opens-exactly"),
-        pytest.param("1d", 1440.0, True, 1440, id="position-1x-opens-exactly"),
-    ],
-)
-def test_cooldown_guard_window_scales_with_the_configured_timeframe(
-    timeframe: str,
-    elapsed_minutes: float,
-    expected_passed: bool,
-    expected_cooldown: int,
-) -> None:
-    """The per-timeframe cooldown multiple, with equality at the window opening the gate."""
-    persistence = MagicMock()
-    persistence.get_last_execution_timestamp.return_value = (
-        datetime.now(timezone.utc) - timedelta(minutes=elapsed_minutes)
-    )
-
-    result = CooldownWindowGuard(persistence=persistence).check(
-        intent(), capital=CAPITAL, config=SimpleNamespace(TIMEFRAME=timeframe)
-    )
-
-    assert result.passed is expected_passed
-    assert result.metadata["cooldown_minutes"] == expected_cooldown
-    if expected_passed:
-        assert result.reason.startswith("Cooldown expired:")
-    else:
-        assert result.reason.startswith("Cooldown active:")
-        assert result.metadata["remaining_minutes"] == pytest.approx(0.1)
-
-
-def test_cooldown_guard_caches_history_until_invalidated() -> None:
-    """A cached history read is served until invalidate_cache forces a re-read."""
-    persistence = MagicMock()
-    persistence.get_last_execution_timestamp.return_value = None
-    guard = CooldownWindowGuard(persistence=persistence)
-    config = SimpleNamespace(TIMEFRAME="4h")
-
-    first = guard.check(intent(), capital=CAPITAL, config=config)
-    persistence.get_last_execution_timestamp.return_value = (
-        datetime.now(timezone.utc) - timedelta(minutes=1)
-    )
-    cached = guard.check(intent(), capital=CAPITAL, config=config)
-    guard.invalidate_cache()
-    refreshed = guard.check(intent(), capital=CAPITAL, config=config)
-
-    assert first.passed is True
-    assert first.reason == "No prior execution — cooldown not applicable"
-    assert cached.passed is True
-    assert cached.reason == first.reason
-    assert refreshed.passed is False
-    assert refreshed.metadata["cooldown_minutes"] == 480
-    assert persistence.get_last_execution_timestamp.call_count == 2
 
 
 @pytest.mark.parametrize(
@@ -617,7 +543,7 @@ def test_configured_symbol_guard_rejects_any_other_pair(
             id="rejecting-guard",
         ),
         pytest.param(
-            (ConfiguredSymbolGuard, MaxPositionSizeGuard, CooldownWindowGuard),
+            (ConfiguredSymbolGuard, MaxPositionSizeGuard),
             0.42,
             "max_position_size: Position size 42.0% exceeds maximum 10.0%",
             id="production-pipeline-over-cap",
@@ -642,19 +568,9 @@ async def test_strategy_pipeline_blocks_entry_and_skips_risk_sizing(
     )
 
 
-@pytest.mark.parametrize(
-    ("guard_classes", "expected_invalidations"),
-    [
-        pytest.param(None, None, id="no-guard-pipeline"),
-        pytest.param((CooldownGuardDouble,), [1], id="cooldown-cache-dropped-after-execution"),
-    ],
-)
-async def test_strategy_executes_and_invalidates_the_cooldown_cache(
-    guard_classes: tuple[type, ...] | None, expected_invalidations: list[int] | None
-) -> None:
-    """An accepted entry is sized, persisted, and drops the cooldown cache."""
-    guards = [] if guard_classes is None else [guard_class() for guard_class in guard_classes]
-    strategy = guard_strategy(None if guard_classes is None else GuardPipeline(guards))
+async def test_strategy_executes_without_a_guard_pipeline() -> None:
+    """An accepted entry with no guard pipeline is sized and persisted."""
+    strategy = guard_strategy(None)
 
     decision = await open_position(strategy)
 
@@ -663,10 +579,7 @@ async def test_strategy_executes_and_invalidates_the_cooldown_cache(
     assert strategy.risk_manager.calculate_entry_parameters.call_count == 1
     assert strategy.persistence.async_save_position.await_count == 1
     assert strategy.current_position.size == pytest.approx(5.0)
-    if guard_classes is None:
-        assert strategy.guard_pipeline is None
-    else:
-        assert [guard.invalidations for guard in guards] == expected_invalidations
+    assert strategy.guard_pipeline is None
 
 
 @pytest.mark.parametrize(
@@ -1190,6 +1103,88 @@ async def test_position_monitor_persists_due_exit_timestamps(
     assert context.persistence.state["take_profit_check_interval"] == "15m"
 
 
+async def test_executor_owned_exits_skip_local_hard_close_but_keep_cadence() -> None:
+    """With the executor owning exits, due hard checks advance the cadence and never close locally."""
+    state = {
+        "last_stop_loss_check_at": (NOW - timedelta(minutes=30)).isoformat(),
+        "last_take_profit_check_at": (NOW - timedelta(minutes=30)).isoformat(),
+    }
+    strategy = RecordingExitStrategy(close_reason="stop_loss")
+    context = monitor_context(state=state, strategy=strategy, manages_exits=lambda: False)
+
+    reason = await context.position_monitor.run_hard_exit_checks(95.0, NOW, state)
+
+    assert reason is None
+    assert strategy.calls == []
+    assert strategy.current_position is not None
+    assert context.persistence.state["last_stop_loss_check_at"] == NOW.isoformat()
+    assert context.persistence.state["last_take_profit_check_at"] == NOW.isoformat()
+
+
+async def test_executor_owned_exits_skip_local_soft_close() -> None:
+    """Soft-window evaluation is skipped as well while the exchange owns the exits."""
+    strategy = RecordingExitStrategy(close_reason="stop_loss")
+    context = monitor_context(strategy=strategy, manages_exits=lambda: False)
+
+    await context.position_monitor.check_soft_exit_status(95.0, is_candle_close=True)
+
+    assert strategy.calls == []
+    assert strategy.current_position is not None
+
+
+async def test_bot_owned_exits_still_close_locally_when_executor_is_disabled() -> None:
+    """Without an executor the bot keeps managing its own exits (regression guard)."""
+    state = {
+        "last_stop_loss_check_at": (NOW - timedelta(minutes=30)).isoformat(),
+        "last_take_profit_check_at": (NOW - timedelta(minutes=30)).isoformat(),
+    }
+    strategy = RecordingExitStrategy(close_reason="stop_loss")
+    context = monitor_context(state=state, strategy=strategy, manages_exits=lambda: True)
+
+    reason = await context.position_monitor.run_hard_exit_checks(95.0, NOW, state)
+
+    assert reason == "stop_loss"
+    assert strategy.current_position is None
+
+
+async def test_local_exit_condition_alerts_and_keeps_the_position(
+) -> None:
+    """A reached bracket is surfaced to the operator WITHOUT closing anything locally.
+
+    Wave 3: nothing was booked, so the monitor must not clear its state, must not send
+    a "position closed" summary and must keep publishing status for the open trade.
+    """
+    state = {
+        "last_stop_loss_check_at": (NOW - timedelta(minutes=30)).isoformat(),
+        "last_take_profit_check_at": (NOW - timedelta(minutes=30)).isoformat(),
+    }
+    request = LocalExitRequest(
+        reason="stop_loss",
+        observed_price=95.0,
+        state="unknown",
+        intent_key="close:BTC/USDC|2026-04-30T12:00:00+00:00",
+        order_id=None,
+        detail="the local exit condition stop_loss — no fill evidence",
+    )
+    strategy = LocalExitRequestStrategy(request)
+    notifier = MagicMock()
+    notifier.send_message = AsyncMock()
+    context = monitor_context(state=state, strategy=strategy, notifier=notifier)
+    context.position_monitor.handle_position_closed = AsyncMock()
+
+    reason = await context.position_monitor.run_hard_exit_checks(95.0, NOW, state)
+
+    assert reason is None
+    assert strategy.current_position is not None, "the local position must survive"
+    context.position_monitor.handle_position_closed.assert_not_awaited()
+    notifier.send_message.assert_awaited_once()
+    assert "unknown" in notifier.send_message.await_args.args[0]
+    assert context.position_monitor.logger.critical.called
+
+    assert strategy.take_local_exit_request() is None
+    assert strategy.request_reads == 2
+
+
 async def test_position_status_loop_waits_then_runs_due_checks_and_status() -> None:
     """The loop sleeps once, then checks the due exit and sends the due status update."""
     started = datetime.now(timezone.utc)
@@ -1244,7 +1239,12 @@ async def test_position_status_loop_waits_then_runs_due_checks_and_status() -> N
     strategy.check_stop_loss.assert_awaited_once_with(100.0)
     strategy.check_take_profit.assert_not_called()
     notifier.send_position_status.assert_awaited_once_with(
-        position=strategy.current_position, current_price=100.0, channel_id=123
+        position=strategy.current_position,
+        current_price=100.0,
+        channel_id=123,
+        verification="unverified",
+        verified_at=None,
+        verification_detail="no exchange verification performed yet",
     )
     assert context.persistence.state["last_stop_loss_check_at"] != state["last_stop_loss_check_at"]
     assert context.persistence.state["last_status_sent_at"] != state["last_status_sent_at"]
@@ -1285,19 +1285,33 @@ async def test_position_status_loop_waits_then_runs_due_checks_and_status() -> N
 async def test_stop_loss_and_take_profit_checks_are_side_specific(
     method: Any, direction: str, price: float, expected_reason: str | None
 ) -> None:
-    """Each check only evaluates its own exit while still persisting live metrics."""
+    """Each check only evaluates its own exit and NEVER books a close locally.
+
+    Wave 3 rewrote this test (it used to assert ``close_position(reason, ticker_price)``
+    was awaited — the fabrication this wave removes). A hit now returns None, keeps the
+    position, books no row and only records the unbooked local-exit request.
+    """
     strategy = exit_strategy(direction)
 
     reason = await method(strategy, price)
 
-    assert reason == expected_reason
+    assert reason is None, "a local SL/TP hit is a request, never a booked close"
     assert strategy.persistence.async_save_position.await_count == 1
+    strategy.close_position.assert_not_awaited()
+    strategy.statistics_service.recalculate.assert_not_called()
+    assert strategy.persistence.async_save_trade_decision.await_count == 0
+    assert strategy.current_position is not None
+
+    request = strategy.take_local_exit_request()
     if expected_reason is None:
-        strategy.close_position.assert_not_awaited()
+        assert request is None, "a bracket that was not reached must not request a close"
         return
-    close_args = strategy.close_position.await_args.args
-    assert close_args[:2] == (expected_reason, price)
-    assert type(close_args[2]) is MarketConditions
+
+    assert request is not None
+    assert request.reason == expected_reason
+    assert request.observed_price == price
+    assert request.state == "unknown"
+    assert strategy.take_state_divergence() is not None
 
 
 @pytest.mark.parametrize(

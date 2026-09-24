@@ -61,7 +61,7 @@ OHLCV Data (999 candles, 5 exchanges) → 50+ Indicators (Numba JIT)
 → Multimodal AI Analysis
 → TrendValidator (cross-check ADX) → PatternQualityScorer (deterministic score)
 → EV Calculation → Risk Profile Selection
-→ Guard Pipeline (symbol → size → cooldown → R:R)
+→ Guard Pipeline (symbol → size → R:R)
 → Decision (BUY/SELL/HOLD with SL/TP/Size)
 → Post-Mortem (closed trades) → Experience Recording → Vector Embedding
 → Reflection Engine (every 5 trades) → Rule Update

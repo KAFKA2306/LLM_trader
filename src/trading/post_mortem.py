@@ -1,21 +1,58 @@
 """LLM-driven post-mortem analysis for closed trades."""
 
 import asyncio
-import json
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from src.managers.post_mortem_repository import PostMortemRepository
+from src.parsing.unified_parser import UnifiedParser
+
+VERDICT_PATTERN = r"^[a-z0-9]+(?:_[a-z0-9]+)*$"
+MAX_VERDICT_LENGTH = 64
+MAX_TEXT_FIELD_LENGTH = 4000
+RESPONSE_PREVIEW_LENGTH = 200
 
 
 class PostMortemResult(BaseModel):
-    """Validated post-mortem analysis from the LLM."""
+    """Validated post-mortem analysis from the LLM.
 
-    verdict: str = Field(..., min_length=1, description="Short snake_case tag, e.g. overestimated_breakout")
-    llm_analysis: str = Field(..., min_length=1, description="Full analysis of what happened")
-    expected_vs_actual: str = Field(..., min_length=1, description="What was expected vs what actually happened")
-    lesson_learned: str = Field(..., min_length=1, description="Concise actionable lesson for future trades")
+    Hard contract: every field must be present, non-blank and of a plausible
+    length, and the verdict must be a snake_case tag. Missing fields are
+    rejected — they are never filled in with invented content.
+    """
+
+    verdict: str = Field(
+        ...,
+        min_length=1,
+        max_length=MAX_VERDICT_LENGTH,
+        pattern=VERDICT_PATTERN,
+        description="Short snake_case tag, e.g. overestimated_breakout",
+    )
+    llm_analysis: str = Field(
+        ..., min_length=1, max_length=MAX_TEXT_FIELD_LENGTH, description="Full analysis of what happened"
+    )
+    expected_vs_actual: str = Field(
+        ...,
+        min_length=1,
+        max_length=MAX_TEXT_FIELD_LENGTH,
+        description="What was expected vs what actually happened",
+    )
+    lesson_learned: str = Field(
+        ...,
+        min_length=1,
+        max_length=MAX_TEXT_FIELD_LENGTH,
+        description="Concise actionable lesson for future trades",
+    )
+
+    @field_validator("verdict", "llm_analysis", "expected_vs_actual", "lesson_learned")
+    @classmethod
+    def _reject_blank(cls, value: str) -> str:
+        """Reject blank/whitespace-only values without inventing replacements."""
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("must not be blank")
+        return value.strip()
+
 
 
 POST_MORTEM_SYSTEM_PROMPT = """\
@@ -57,6 +94,7 @@ class PostMortemService:
         self.model_manager = model_manager
         self.unified_parser = unified_parser
         self.repository = repository
+        self._last_parse_failure_reason = ""
 
     async def analyze_closed_trade(
         self,
@@ -86,7 +124,11 @@ class PostMortemService:
 
             result = self._parse_response(response_text)
             if result is None:
-                self.logger.warning("Post-mortem: failed to parse LLM response")
+                self.logger.warning(
+                    "Post-mortem: failed to parse LLM response (reason=%s) | preview: %s",
+                    self._last_parse_failure_reason,
+                    self._response_preview(response_text),
+                )
                 return None
 
             await asyncio.to_thread(
@@ -170,20 +212,57 @@ class PostMortemService:
     def _parse_response(self, response_text: str) -> PostMortemResult | None:
         """Parse and validate the LLM response into PostMortemResult.
 
-        Tries markdown code block extraction first, then falls back to raw JSON
-        parsing. Validates with Pydantic.
+        Tolerant read (fenced ```json block, JSON embedded in prose and raw
+        control characters inside string values are all handled), followed by
+        the hard Pydantic contract. Only structure is repaired — missing fields
+        are never invented and text values are never rewritten.
+        Returns:
+            PostMortemResult on success, None when the payload cannot be
+            decoded or fails validation (never raises).
         """
-        try:
-            data = self.unified_parser.extract_json_block(response_text)
-            if data:
-                return PostMortemResult(**data)
-        except Exception as e:  # noqa: BLE001
-            self.logger.debug("Post-mortem markdown parse error: %s", e)
-
-        try:
-            data = json.loads(response_text.strip())
-            return PostMortemResult(**data)
-        except Exception as e:  # noqa: BLE001
-            self.logger.debug("Post-mortem raw JSON parse error: %s", e)
+        self._last_parse_failure_reason = "unknown"
+        data = self._extract_payload(response_text)
+        if data is None:
+            self._last_parse_failure_reason = "no decodable JSON object in the response"
             return None
+        try:
+            return PostMortemResult(**data)
+        except ValidationError as error:
+            self._last_parse_failure_reason = f"schema validation failed: {error.errors()[0].get('msg', error)}"
+            return None
+        except TypeError as error:
+            self._last_parse_failure_reason = f"payload is not a mapping: {error}"
+            return None
+
+    def _extract_payload(self, response_text: str) -> dict[str, Any] | None:
+        """Extract the post-mortem mapping from a raw LLM response.
+
+        Uses the injected unified parser first (markdown fenced block) and falls
+        back to the tolerant decoder, which also escapes raw control characters
+        that appear inside string values.
+        """
+        if not response_text or not response_text.strip():
+            return None
+
+        extract_json_block = getattr(self.unified_parser, "extract_json_block", None)
+        if callable(extract_json_block):
+            try:
+                data = extract_json_block(response_text)
+            except Exception as error:  # noqa: BLE001
+                self.logger.debug("Post-mortem markdown parse error: %s", error)
+                data = None
+            if isinstance(data, dict) and data:
+                return data
+
+        return UnifiedParser.parse_json_object(response_text)
+
+    @staticmethod
+    def _response_preview(response_text: str, limit: int = RESPONSE_PREVIEW_LENGTH) -> str:
+        """Short single-line preview of a response for diagnostics (never the prompt)."""
+        if not response_text:
+            return "<empty>"
+        preview = " ".join(str(response_text).split())
+        if len(preview) > limit:
+            preview = preview[:limit] + "..."
+        return preview
 

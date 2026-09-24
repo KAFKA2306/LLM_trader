@@ -60,7 +60,5 @@ website/dist/
 .tmp.driveupload/
 *.tmp
 
-# AI-generated temporary plans (never committed)
-.ai/plans/
 .hermes.md
 

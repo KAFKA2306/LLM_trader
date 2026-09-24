@@ -5,7 +5,13 @@ Prints AI trading analysis to console with colored and formatted output.
 import io
 from typing import TYPE_CHECKING, Any
 
-from .base_notifier import BaseNotifier
+from src.trading.executor_reconciliation import (
+    VERIFICATION_EXCHANGE_VERIFIED,
+    VERIFICATION_EXECUTOR_REPORTED,
+    VERIFICATION_UNVERIFIED,
+)
+
+from .base_notifier import BaseNotifier, format_commission
 
 if TYPE_CHECKING:
     from src.config.loader import Config
@@ -75,8 +81,8 @@ class ConsoleNotifier(BaseNotifier):
             print(f"Invested:      ${decision.quote_amount:,.2f}")
         if decision.quantity:
             print(f"Quantity:      {self.formatter.fmt(decision.quantity)}")
-        if decision.action in ["BUY", "SELL", "CLOSE", "CLOSE_LONG", "CLOSE_SHORT"] and decision.fee:
-            print(f"Fee:       ${decision.fee:.4f}")
+        if decision.action in ["BUY", "SELL", "CLOSE", "CLOSE_LONG", "CLOSE_SHORT"]:
+            print(f"Fee:       {format_commission(decision.fee)}")
 
         print(f"\nReasoning: {decision.reasoning}")
         print("=" * 60 + "\n")
@@ -87,9 +93,15 @@ class ConsoleNotifier(BaseNotifier):
             symbol: str,
             timeframe: str,
             channel_id: int | None = None,
-            chart_image: io.BytesIO | None = None
+            chart_image: io.BytesIO | None = None,
+            execution_note: str | None = None
     ) -> None:
-        """Print full analysis notification with reasoning and JSON data."""
+        """Print full analysis notification with reasoning and JSON data.
+
+        ``execution_note`` marks a recommendation the bot did NOT execute; it is
+        printed before the analysis so the console never shows a bare signal that
+        reads as a performed action.
+        """
         try:
             analysis = result.get("analysis")
             if not analysis:
@@ -102,6 +114,9 @@ class ConsoleNotifier(BaseNotifier):
             print(f"📊 ANALYSIS: {symbol} ({timeframe})")
             print("=" * 60)
 
+            if execution_note:
+                print(f"🚫 RECOMMENDATION NOT EXECUTED: {execution_note}")
+
             if reasoning:
                 print(f"\n{reasoning}")
 
@@ -113,9 +128,16 @@ class ConsoleNotifier(BaseNotifier):
             self,
             position: Any,
             current_price: float,
-            channel_id: int | None = None
+            channel_id: int | None = None,
+            *,
+            verification: str = VERIFICATION_UNVERIFIED,
+            verified_at: Any = None,
+            verification_detail: str | None = None
     ) -> None:
-        """Print current open position status."""
+        """Print current open position status.
+
+        ``verification`` mirrors the Discord card's venue, tracker-only or unknown state.
+        """
         try:
             pnl_pct, pnl_quote = self.calculate_position_pnl(position, current_price)
             stop_distance_pct, target_distance_pct = self.calculate_stop_target_distances(position, current_price)
@@ -123,9 +145,28 @@ class ConsoleNotifier(BaseNotifier):
 
             _, emoji = self.get_pnl_styling(pnl_pct)
 
+            exchange_verified = verification == VERIFICATION_EXCHANGE_VERIFIED
+            reported = verification == VERIFICATION_EXECUTOR_REPORTED
+            if exchange_verified:
+                header = f"{emoji} OPEN {position.direction} POSITION - {position.symbol}"
+                position_state = f"Exchange-verified ({verified_at or 'unknown'}) — protection active"
+            elif reported:
+                header = (
+                    f"{emoji} OPEN {position.direction} POSITION (executor-reported, NOT "
+                    f"exchange-verified) - {position.symbol}"
+                )
+                position_state = (
+                    f"executor-reported ({verified_at or 'unknown'}) — NOT exchange-verified"
+                )
+            else:
+                header = f"⚠️ POSITION STATUS UNVERIFIED - {position.symbol}"
+                position_state = (
+                    f"UNVERIFIED — {verification_detail or 'no exchange verification performed yet'}"
+                )
             print("\n" + "=" * 60)
-            print(f"{emoji} OPEN {position.direction} POSITION - {position.symbol}")
+            print(header)
             print("=" * 60)
+            print(f"Position State:  {position_state}")
             print(f"Entry Price:     ${position.entry_price:,.2f}")
             print(f"Current Price:   ${current_price:,.2f}")
             print(f"Quantity:        {self.formatter.fmt(position.size)}")
@@ -143,7 +184,7 @@ class ConsoleNotifier(BaseNotifier):
             print(f"Stop Loss:       ${position.stop_loss:,.2f} ({stop_distance_pct:+.2f}%)")
             print(f"Take Profit:     ${position.take_profit:,.2f} ({target_distance_pct:+.2f}%)")
             print(f"Exit Monitoring: {self.format_exit_monitoring()}")
-            print(f"Entry Fee:       ${position.entry_fee:.4f}")
+            print(f"Entry Fee:       {format_commission(position.entry_fee)}")
             print(f"Time Held:       {hours_held:.1f}h")
             print(f"Entry Time:      {position.entry_time.strftime('%Y-%m-%d %H:%M:%S')}")
             print("=" * 60)
@@ -172,7 +213,10 @@ class ConsoleNotifier(BaseNotifier):
             print(f"Total P&L (%):    {stats['total_pnl_pct']:+.2f}%")
             print(f"Avg P&L/Trade:    {stats['avg_pnl_pct']:+.2f}%")
             print(f"Win Rate:         {stats['win_rate']:.1f}% ({stats['winning_trades']}/{stats['closed_trades']})")
-            print(f"Total Fees:       ${stats['total_fees']:.4f}")
+            total_fees_value = format_commission(stats["total_fees"])
+            if not stats.get("fees_complete", True):
+                total_fees_value += f" (+{stats['fees_unknown_trades']} trade(s) without fee data)"
+            print(f"Total Fees:       {total_fees_value}")
             print(f"Net P&L (USDT):   ${stats['net_pnl']:+,.2f}")
 
             last_closed_trade = stats.get("last_closed_trade")

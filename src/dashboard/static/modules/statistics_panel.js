@@ -1,7 +1,3 @@
-/* global DOMPurify */
-/**
- * Statistics panel module - Displays performance stats and win/loss analytics.
- */
 
 const STAT_ANNOTATIONS = {
     total_trades: "Number of completed trades (entries that have been closed). Higher volume indicates more active trading.",

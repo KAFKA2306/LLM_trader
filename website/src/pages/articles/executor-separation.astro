@@ -28,7 +28,7 @@ import ArticleLayout from '../../layouts/ArticleLayout.astro';
 			<li><strong>Order type enforcement</strong> — with market entries configured, limit orders are refused rather than quietly resized;</li>
 			<li><strong>Max position notional</strong> — <code>quantity × entry price</code> has to fit the USDC limit, re-priced from the exchange if the decision arrives without a price.</li>
 		</ol>
-		<p>On the engine side the same decision already passed the configured pair (<code>crypto_pair = BTC/USDC</code>, 4h — the bot does not roam the market), a cooldown window, the shared R/R floor policy and the position cap. A spot SELL is capped to what is actually held, so a short can never be created by accident. Stop distances come from the regime risk profile (a tight 1.5× ATR in choppy markets, a wider 2× ATR in trends) instead of a fixed percentage.</p>
+		<p>On the engine side the same decision already passed the configured pair (<code>crypto_pair = BTC/USDC</code>, 4h — the bot does not roam the market), the shared R/R floor policy and the position cap. A spot SELL is capped to what is actually held, so a short can never be created by accident. Stop distances come from the regime risk profile (a tight 1.5× ATR in choppy markets, a wider 2× ATR in trends) instead of a fixed percentage.</p>
 		<p>If governance or risk validation cannot decide safely, the system <strong>fails closed</strong>: no order, no exception. Soft exits trigger at candle close; hard exits poll live prices every 15 minutes.</p>
 	</section>
 

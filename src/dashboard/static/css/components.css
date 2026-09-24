@@ -1,4 +1,3 @@
-/* Lightbox Overlay */
 #lightbox-overlay {
     position: fixed;
     top: 0;
@@ -176,7 +175,6 @@
     gap: 20px;
 }
 
-/* Components */
 button {
     background: transparent;
     border: 1px solid var(--border-subtle);
@@ -260,7 +258,6 @@ button:hover {
 
 
 
-/* Progress Bars */
 .metric-bar-container {
     background: rgba(255, 255, 255, 0.05);
     border-radius: 4px;
@@ -418,7 +415,6 @@ button:hover {
     font-size: 12px;
 }
 
-/* Context Pills */
 .context-pill {
     display: inline-block;
     padding: 2px 6px;
@@ -462,7 +458,6 @@ button:hover {
     background: rgba(0, 240, 255, 0.1);
 }
 
-/* Semantic Rules Cards */
 .rules-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
@@ -506,7 +501,6 @@ button:hover {
     font-weight: 600;
 }
 
-/* Loading States */
 @keyframes spin {
     to {
         transform: rotate(360deg);
@@ -559,7 +553,6 @@ button:hover {
     line-height: 1.5;
 }
 
-/* Fullscreen Modal */
 .fullscreen-modal {
     display: none;
     position: fixed;
@@ -644,7 +637,6 @@ button:hover {
 }
 
 
-/* Decision Pathways panel */
 .decision-synopsis {
     background: rgba(88, 166, 255, 0.08);
     border: 1px solid rgba(88, 166, 255, 0.25);

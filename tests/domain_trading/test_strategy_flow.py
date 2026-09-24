@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import json
 import math
+import tempfile
 from datetime import datetime, timezone, tzinfo
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -29,6 +31,7 @@ from src.trading.data_models import (
     TradeDecision,
     TradingMemory,
 )
+from src.trading.executor_reconciliation import ExitEvidence
 from src.trading.market_conditions_extractor import MarketConditionsExtractor
 from src.trading.position_extractor import PositionExtractor
 from src.trading.stop_loss_tightening_policy import StopLossTighteningPolicy
@@ -145,7 +148,6 @@ _SMALL_SIZE: dict[str, Any] = {
     "quantity": 0.5,
     "size_pct": 0.005,
     "quote_amount": 50.0,
-    "entry_fee": 0.05,
 }
 
 
@@ -174,7 +176,6 @@ def _risk(**overrides: Any) -> SimpleNamespace:
         "take_profit": 112.0,
         "size_pct": 0.05,
         "quantity": 5.0,
-        "entry_fee": 0.5,
         "sl_distance_pct": 0.05,
         "tp_distance_pct": 0.12,
         "rr_ratio": 2.4,
@@ -184,6 +185,21 @@ def _risk(**overrides: Any) -> SimpleNamespace:
     }
     values.update(overrides)
     return SimpleNamespace(**values)
+
+
+def _isolated_config(**overrides: Any) -> Any:
+    """Config double whose intent journal never leaks between pytest runs.
+
+    Booking idempotency is restart-safe by design, so a shared repo path makes a
+    second run skip an exit the first run already booked.
+    """
+    values: dict[str, Any] = {
+        "BOT_INTENT_JOURNAL_PATH": str(
+            Path(tempfile.mkdtemp()) / "bot_position_intents.jsonl"
+        )
+    }
+    values.update(overrides)
+    return make_config(**values)
 
 
 def _strategy(
@@ -217,7 +233,7 @@ def _strategy(
         statistics_service=statistics,
         memory_service=MagicMock(),
         risk_manager=risk_manager,
-        config=config if config is not None else make_config(),
+        config=config if config is not None else _isolated_config(),
         position_extractor=extractor if extractor is not None else PositionExtractor(),
         conditions_extractor=MarketConditionsExtractor(logger),
         tightening_policy=policy,
@@ -229,6 +245,38 @@ def _sync_brain_hook(brain: MagicMock) -> MagicMock:
     """The close path calls update_from_closed_trade through asyncio.to_thread."""
     brain.update_from_closed_trade = MagicMock()
     return brain
+
+
+def proven_exit(**overrides: Any) -> ExitEvidence:
+    """Wave-5 evidence of a PROVEN exit (real fill price + amount + stable event id).
+
+    A close may only reach the post-mortem and the brain WITH this: the guard refuses a
+    close whose fact is unproven (see ``TestLearningNeedsEvidence``).
+    """
+    values: dict[str, Any] = {
+        "source": "executor_exit_journal",
+        "price": 110.0,
+        "quantity": 0.01,
+        "event_id": "probe-close-event",
+    }
+    values.update(overrides)
+    return ExitEvidence(**values)
+
+
+def _enable_learning(strategy: Any, persistence: MagicMock) -> MagicMock:
+    """Wire the post-mortem a lesson now requires (proven exit + validated analysis).
+
+    Wave 5: the brain is only updated when the post-mortem produced a validated result,
+    so a close-path test that asserts learning has to provide the entry decision and a
+    post-mortem returning a result. Returns the post-mortem double for assertions.
+    """
+    entry = MagicMock()
+    entry.reasoning = "Breakout continuation."
+    persistence.get_entry_decision_for_position = MagicMock(return_value=entry)
+    post_mortem = MagicMock()
+    post_mortem.analyze_closed_trade = AsyncMock(return_value=MagicMock())
+    strategy.post_mortem_service = post_mortem
+    return post_mortem
 
 
 def _decision(**overrides: Any) -> TradeDecision:
@@ -258,7 +306,6 @@ class TestProcessAnalysisFlow:
             take_profit=80720.0,
             size_pct=0.40,
             quantity=0.051,
-            entry_fee=2.97,
             sl_distance_pct=0.018,
             tp_distance_pct=0.036,
             rr_ratio=2.0,
@@ -748,17 +795,224 @@ class TestUpdatePositionParameters:
         )
         persistence.async_save_position.assert_not_awaited()
 
+    async def test_tightening_gate_judges_with_the_price_the_prompt_showed(self) -> None:
+        """One price for the prompt line and the gate, or the model is set up to fail.
+
+        Regression (2026-09-23): the position context advertises the live ticker
+        (16.1% => "Tightening eligible: YES") while the gate read the closed-candle
+        price (14.6% < 15%) and rejected that same UPDATE in the same cycle.
+        """
+        strategy, logger, persistence, _, _ = _strategy(
+            position=make_position(
+                direction="LONG",
+                entry_price=85987.62,
+                stop_loss=83850.0,
+                take_profit=90400.0,
+            ),
+            policy=StopLossTighteningPolicy(swing_threshold=0.15),
+            config=_isolated_config(TIMEFRAME="4h"),
+        )
+        result = {
+            "current_price": 86633.30,
+            "analysis": {
+                "signal": "UPDATE",
+                "confidence": 82,
+                "stop_loss": 85987.62,
+                "take_profit": 90400.0,
+                "position_size": 0.0,
+                "reasoning": "raise the stop to breakeven",
+            },
+        }
+
+        decision = await strategy.process_analysis(
+            result, "BTC/USDC", market_price=86698.39
+        )
+
+        assert decision is not None and decision.action == "UPDATE"
+        current = strategy.current_position
+        assert current is not None and current.stop_loss == 85987.62
+        persistence.async_save_position.assert_awaited_once()
+        assert any("Tightening Stop Loss" in str(call) for call in logger.info.call_args_list)
+
+    async def test_tightening_gate_still_rejects_without_a_fresher_price(self) -> None:
+        """No live price (or one still short of the threshold) keeps the old protection."""
+        strategy, logger, persistence, _, _ = _strategy(
+            position=make_position(
+                direction="LONG",
+                entry_price=85987.62,
+                stop_loss=83850.0,
+                take_profit=90400.0,
+            ),
+            policy=StopLossTighteningPolicy(swing_threshold=0.15),
+            config=_isolated_config(TIMEFRAME="4h"),
+        )
+        result = {
+            "current_price": 86633.30,
+            "analysis": {
+                "signal": "UPDATE",
+                "confidence": 82,
+                "stop_loss": 85987.62,
+                "take_profit": 90400.0,
+                "position_size": 0.0,
+                "reasoning": "raise the stop to breakeven",
+            },
+        }
+
+        decision = await strategy.process_analysis(
+            result, "BTC/USDC", market_price=86633.30
+        )
+
+        assert decision is None
+        current = strategy.current_position
+        assert current is not None and current.stop_loss == 83850.0
+        persistence.async_save_position.assert_not_awaited()
+        assert any(
+            "REJECTED premature SL tightening" in str(call)
+            for call in logger.info.call_args_list
+        )
+
+    async def test_refused_tightening_reaches_the_next_analysis_prompt(self) -> None:
+        """A refusal has to outlive the cycle: one analysis per timeframe is the only
+        place where the model can still learn that its UPDATE never ran.
+
+        Regression (2026-09-23): the gate rejected the breakeven UPDATE, the model was
+        never told, and the operator saw a decision card for an order that did not exist.
+        """
+        strategy, _, _, _, _ = _strategy(
+            position=make_position(
+                direction="LONG",
+                entry_price=85987.62,
+                stop_loss=83850.0,
+                take_profit=90400.0,
+            ),
+            policy=StopLossTighteningPolicy(swing_threshold=0.15),
+            config=_isolated_config(TIMEFRAME="4h"),
+        )
+        result = {
+            "current_price": 86633.30,
+            "analysis": {
+                "signal": "UPDATE",
+                "confidence": 82,
+                "stop_loss": 85987.62,
+                "take_profit": 90400.0,
+                "position_size": 0.0,
+                "reasoning": "raise the stop to breakeven",
+            },
+        }
+
+        decision = await strategy.process_analysis(
+            result, "BTC/USDC", market_price=86633.30
+        )
+
+        assert decision is None
+        intent = strategy.position_intents().recent(1)[0]
+        assert intent.action == "UPDATE"
+        assert intent.state == "refused"
+        assert intent.evidence == "bot_policy"
+        assert "progress" in (intent.detail or "").lower()
+        assert intent.payload["requested_stop_loss"] == 85987.62
+        assert intent.payload["old_stop_loss"] == 83850.0
+
+        alert = strategy.take_rejected_intent_alert()
+        assert alert is not None
+        assert "83,850.00" in alert and "85,987.62" in alert
+        assert strategy.take_rejected_intent_alert() is None
+
+        context = strategy.get_position_context(current_price=86633.30)
+        assert "### Last Action Outcome" in context
+        assert "state: refused" in context
+        assert "stop loss in force stays $83,850.00" in context
+
+    async def test_update_interval_refusal_is_recorded_as_well(self) -> None:
+        """The 'letting trade breathe' gate is a refusal too, and equally invisible."""
+        strategy, _, _, _, _ = _strategy(
+            position=make_position(
+                direction="LONG",
+                entry_price=85987.62,
+                stop_loss=83850.0,
+                take_profit=90400.0,
+            ),
+            policy=StopLossTighteningPolicy(swing_threshold=0.15),
+            config=_isolated_config(TIMEFRAME="4h"),
+        )
+        strategy._last_position_update_time = datetime.now(timezone.utc)
+        strategy._executor_has_position = AsyncMock(return_value=True)
+
+        decision = await strategy._handle_existing_position(
+            signal="UPDATE",
+            confidence="HIGH",
+            stop_loss=85987.62,
+            take_profit=90400.0,
+            current_price=86698.39,
+            symbol="BTC/USDC",
+            reasoning="raise the stop to breakeven",
+            market_conditions=make_market_conditions(),
+        )
+
+        assert decision is None
+        intent = strategy.position_intents().recent(1)[0]
+        assert intent.action == "UPDATE"
+        assert intent.state == "refused"
+        assert "last position update" in (intent.detail or "")
+        alert = strategy.take_rejected_intent_alert()
+        assert alert is not None and "refused by the bot's own policy" in alert
+
+    async def test_unverifiable_executor_state_is_recorded_as_a_refusal(self) -> None:
+        """An executor that cannot confirm the position drops the command — say so.
+
+        Regression (2026-09-23): both UPDATE and CLOSE returned None on an unverifiable
+        executor state with nothing but a log line, so the model never learned that its
+        order was dropped inside the bot.
+        """
+        for signal, expected in (("UPDATE", "UPDATE"), ("CLOSE", "CLOSE")):
+            strategy, _, _, _, _ = _strategy(
+                position=make_position(
+                    direction="LONG",
+                    entry_price=85987.62,
+                    stop_loss=83850.0,
+                    take_profit=90400.0,
+                ),
+                policy=StopLossTighteningPolicy(swing_threshold=0.15),
+                config=_isolated_config(TIMEFRAME="4h"),
+            )
+            strategy._executor_has_position = AsyncMock(return_value=None)
+
+            decision = await strategy._handle_existing_position(
+                signal=signal,
+                confidence="HIGH",
+                stop_loss=85987.62,
+                take_profit=90400.0,
+                current_price=86698.39,
+                symbol="BTC/USDC",
+                reasoning="test",
+                market_conditions=make_market_conditions(),
+            )
+
+            assert decision is None
+            intent = strategy.position_intents().recent(1)[0]
+            assert (intent.action, intent.state) == (expected, "refused")
+            assert intent.evidence == "bot_policy"
+            assert "executor could not confirm" in (intent.detail or "")
+            alert = strategy.take_rejected_intent_alert()
+            assert alert is not None and alert.startswith(expected)
+
 
 class TestClosePosition:
-    """Closing a position: P&L bookkeeping, learning hooks and failure tolerance."""
+    """Closing a position: P&L bookkeeping, learning hooks and failure tolerance.
+
+    Wave 4: the closing commission is booked from REAL fill/order data only. When the
+    caller has no fee evidence the row carries ``fee=None`` (UNKNOWN) and says so — the
+    configured ``TRANSACTION_FEE_PERCENT`` (0.075%) is never substituted, which is what
+    produced the fabricated 2.851875 USDC fee in the 2026-09-21 incident.
+    """
 
     @pytest.mark.parametrize(
-        ("direction", "close_price", "reason", "expected_action", "expected_pnl", "expected_fee"),
+        ("direction", "close_price", "reason", "expected_action", "expected_pnl", "exit_fee"),
         [
-            pytest.param("LONG", 94.0, "stop_loss", "CLOSE_LONG", -6.00, 0.000705, id="long-stop-loss"),
-            pytest.param("LONG", 115.0, "take_profit", "CLOSE_LONG", 15.00, 0.0008625, id="long-take-profit"),
-            pytest.param("SHORT", 106.0, "stop_loss", "CLOSE_SHORT", -6.00, 0.000795, id="short-stop-loss"),
-            pytest.param("SHORT", 85.0, "take_profit", "CLOSE_SHORT", 15.00, 0.0006375, id="short-take-profit"),
+            pytest.param("LONG", 94.0, "stop_loss", "CLOSE_LONG", -6.00, 0.0, id="long-stop-loss-known-zero-fee"),
+            pytest.param("LONG", 115.0, "take_profit", "CLOSE_LONG", 15.00, 0.0012, id="long-take-profit-fill-fee"),
+            pytest.param("SHORT", 106.0, "stop_loss", "CLOSE_SHORT", -6.00, 0.0011, id="short-stop-loss-fill-fee"),
+            pytest.param("SHORT", 85.0, "take_profit", "CLOSE_SHORT", 15.00, None, id="short-take-profit-unknown-fee"),
         ],
     )
     async def test_records_pnl_and_updates_dependencies(
@@ -768,9 +1022,9 @@ class TestClosePosition:
         reason: str,
         expected_action: str,
         expected_pnl: float,
-        expected_fee: float,
+        exit_fee: float | None,
     ) -> None:
-        """The close decision carries the right side, P&L, fee and exit reason."""
+        """The close decision carries the right side, P&L, evidence-based fee and reason."""
         position = make_position(
             direction=direction,
             entry_price=100.0,
@@ -779,19 +1033,35 @@ class TestClosePosition:
         )
         strategy, _, persistence, brain, statistics = _strategy(position=position)
         _sync_brain_hook(brain)
+        post_mortem = _enable_learning(strategy, persistence)
         conditions = make_market_conditions(trend_direction="BULLISH", adx=40.0)
 
-        await strategy.close_position(reason, close_price, conditions)
+        await strategy.close_position(
+            reason, close_price, conditions, exit_fee=exit_fee,
+            fee_source="executor_exit_journal" if exit_fee is not None else None,
+            filled_quantity=position.size,
+            evidence=proven_exit(price=close_price, quantity=position.size),
+        )
 
         persistence.async_save_trade_decision.assert_awaited_once()
         decision = persistence.async_save_trade_decision.await_args.args[0]
         assert decision.action == expected_action
         assert decision.symbol == "BTC/USDT"
-        assert decision.reasoning == (
-            f"Position closed: {reason}. P&L: {expected_pnl:+.2f}%. "
-            f"Fee: ${expected_fee:.4f}"
+        fee_text = (
+            "Fee: unknown (no fill/order fee data — no rate was assumed)"
+            if exit_fee is None
+            else f"Fee: ${exit_fee:.4f} from executor_exit_journal"
         )
-        assert decision.fee == pytest.approx(expected_fee)
+        assert decision.reasoning == (
+            f"Position closed: {reason}. P&L: {expected_pnl:+.2f}%. {fee_text}"
+        )
+        if exit_fee is None:
+            assert decision.fee is None
+            rate_fee = close_price * position.size * strategy.config.TRANSACTION_FEE_PERCENT
+            assert decision.fee != pytest.approx(rate_fee)
+            assert f"${rate_fee:.4f}" not in decision.reasoning
+        else:
+            assert decision.fee == pytest.approx(exit_fee)
         assert (decision.price, decision.stop_loss, decision.take_profit) == (
             close_price,
             position.stop_loss,
@@ -801,10 +1071,13 @@ class TestClosePosition:
             position.size,
             position.size_pct,
         )
+        assert decision.quantity == position.size
         strategy.memory_service.add_decision.assert_called_once_with(decision)
         brain.update_from_closed_trade.assert_called_once()
         assert brain.update_from_closed_trade.call_args.kwargs["market_conditions"] is conditions
         assert brain.update_from_closed_trade.call_args.kwargs["close_reason"] == reason
+        assert brain.update_from_closed_trade.call_args.kwargs["evidence"].quantity == position.size
+        post_mortem.analyze_closed_trade.assert_awaited_once()
         statistics.recalculate.assert_called_once_with(10000.0)
         persistence.async_save_position.assert_awaited_with(None)
         assert strategy.current_position is None
@@ -816,6 +1089,7 @@ class TestClosePosition:
             position=make_position(direction="LONG")
         )
         _sync_brain_hook(brain)
+        _enable_learning(strategy, persistence)
         dashboard_state = DashboardState()
         dashboard_state.mark_brain_rebuild_started = AsyncMock()
         dashboard_state.mark_brain_rebuild_completed = AsyncMock()
@@ -826,7 +1100,10 @@ class TestClosePosition:
         if failure == "stats":
             statistics.recalculate.side_effect = RuntimeError("Stats crash")
 
-        await strategy.close_position("take_profit", 110.0, make_market_conditions())
+        await strategy.close_position(
+            "take_profit", 110.0, make_market_conditions(),
+            filled_quantity=0.01, evidence=proven_exit(price=110.0, quantity=0.01),
+        )
 
         assert strategy.current_position is None
         persistence.async_save_position.assert_awaited_with(None)
@@ -850,9 +1127,15 @@ class TestClosePosition:
         ids=["entry-decision", "no-entry-decision"],
     )
     async def test_post_mortem_wiring(self, entry_decision_present: bool) -> None:
-        """The CLOSE row id reaches the post-mortem journal, unless the entry is missing."""
+        """The CLOSE row id reaches the post-mortem journal, unless the entry is missing.
+
+        Wave 5: the post-mortem is only asked for a close WITH proven evidence, and the
+        brain only learns when that post-mortem returned a validated analysis (here it
+        returns None, so the brain stays untouched).
+        """
         position = make_position(direction="LONG")
-        strategy, _, persistence, _, _ = _strategy(position=position)
+        strategy, _, persistence, brain, _ = _strategy(position=position)
+        _sync_brain_hook(brain)
         persistence.async_save_trade_decision = AsyncMock(return_value=42)
         entry = MagicMock()
         entry.reasoning = "Expected breakout continuation."
@@ -863,9 +1146,14 @@ class TestClosePosition:
         post_mortem.analyze_closed_trade = AsyncMock(return_value=None)
         strategy.post_mortem_service = post_mortem
 
-        await strategy.close_position("stop_loss", 90.0, make_market_conditions())
+        await strategy.close_position(
+            "stop_loss", 90.0, make_market_conditions(),
+            filled_quantity=position.size,
+            evidence=proven_exit(price=90.0, quantity=position.size),
+        )
 
         assert strategy.current_position is None
+        brain.update_from_closed_trade.assert_not_called()
         if not entry_decision_present:
             post_mortem.analyze_closed_trade.assert_not_awaited()
             return
@@ -876,6 +1164,25 @@ class TestClosePosition:
         assert kwargs["reason"] == "stop_loss"
         assert kwargs["entry_decision"] is entry
         assert kwargs["exit_decision"].action == "CLOSE_LONG"
+
+    async def test_post_mortem_without_evidence_is_never_asked(self) -> None:
+        """A close without proof must not even try to write a lesson (wave 5)."""
+        position = make_position(direction="LONG")
+        strategy, logger, persistence, brain, _ = _strategy(position=position)
+        _sync_brain_hook(brain)
+        persistence.get_entry_decision_for_position = MagicMock(return_value=MagicMock())
+        post_mortem = MagicMock()
+        post_mortem.analyze_closed_trade = AsyncMock(return_value=MagicMock())
+        strategy.post_mortem_service = post_mortem
+
+        await strategy.close_position("stop_loss", 90.0, make_market_conditions())
+
+        post_mortem.analyze_closed_trade.assert_not_awaited()
+        brain.update_from_closed_trade.assert_not_called()
+        skipped = [str(call.args) for call in logger.warning.call_args_list]
+        assert any("Lesson skipped: no exit evidence" in message for message in skipped)
+        persistence.async_save_trade_decision.assert_awaited_once()
+        assert strategy.current_position is None
 
     async def test_without_a_position_it_is_a_noop(self) -> None:
         """An empty book means no decision, no learning and no statistics refresh."""
@@ -969,8 +1276,10 @@ class TestOpenNewPosition:
             decision.quantity,
             decision.quote_amount,
             decision.position_size,
-            decision.fee,
-        ) == (5.0, 500.0, 0.05, 0.5)
+        ) == (5.0, 500.0, 0.05)
+        assert decision.fee is None
+        assert strategy.current_position.entry_fee is None
+        assert strategy.current_position.entry_fee != pytest.approx(500.0 * 0.00075)
         assert decision.indicators_json["adx_at_entry"] == 30.0
         assert decision.indicators_json["rr_ratio_at_entry"] == 2.4
 
@@ -989,17 +1298,17 @@ class TestOpenNewPosition:
     @pytest.mark.parametrize(
         ("executor_max", "risk_overrides", "expected", "clamped"),
         [
-            pytest.param(100.0, {}, (1.0, 100.0, 0.01, 0.1), True, id="scaled-to-cap"),
-            pytest.param(100.0, _SMALL_SIZE, (0.5, 50.0, 0.005, 0.05), False, id="under-cap"),
-            pytest.param(500.0, {}, (5.0, 500.0, 0.05, 0.5), False, id="exactly-at-cap"),
-            pytest.param(0.0, {}, (5.0, 500.0, 0.05, 0.5), False, id="cap-disabled"),
+            pytest.param(100.0, {}, (1.0, 100.0, 0.01), True, id="scaled-to-cap"),
+            pytest.param(100.0, _SMALL_SIZE, (0.5, 50.0, 0.005), False, id="under-cap"),
+            pytest.param(500.0, {}, (5.0, 500.0, 0.05), False, id="exactly-at-cap"),
+            pytest.param(0.0, {}, (5.0, 500.0, 0.05), False, id="cap-disabled"),
         ],
     )
     async def test_executor_notional_clamp(
         self,
         executor_max: float,
         risk_overrides: dict[str, Any],
-        expected: tuple[float, float, float, float],
+        expected: tuple[float, float, float],
         clamped: bool,
     ) -> None:
         """Notional above the cap is scaled down; at or below it sizing is untouched."""
@@ -1025,7 +1334,7 @@ class TestOpenNewPosition:
         assert decision.quantity == pytest.approx(expected[0])
         assert decision.quote_amount == pytest.approx(expected[1])
         assert decision.position_size == pytest.approx(expected[2])
-        assert decision.fee == pytest.approx(expected[3])
+        assert decision.fee is None
         position = strategy.current_position
         assert position is not None
         assert (position.size, position.quote_amount, position.size_pct) == pytest.approx(
@@ -1196,8 +1505,6 @@ class TestConditionsAndPriceExtraction:
         self, result: dict[str, Any], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """An unreadable payload yields the neutral snapshot, never a partial one."""
-        # is_weekend follows the UTC clock, so freeze it to a Wednesday: the neutral
-        # snapshot must hold regardless of when the suite runs (it failed every weekend).
         class _Sroda(datetime):
             @classmethod
             def now(cls, tz: tzinfo | None = None) -> datetime:
@@ -1383,8 +1690,15 @@ class TestCheckPosition:
         expected_reason: str | None,
         expected_profit: float | None,
         expected_drawdown: float | None,
+        tmp_path: Path,
     ) -> None:
-        """A hit closes and returns the reason; a miss only updates live metrics.
+        """A hit REQUESTS a close and keeps the position; a miss only updates metrics.
+
+        Wave 3 rewrote this test: it used to assert that a hit closed the trade and
+        wrote a ``CLOSE_*`` row at the ticker price. Booking an exit from a ticker
+        price is the fabrication this wave removes — the condition is now an unbooked
+        request (``take_local_exit_request``) and only executor fill evidence books a
+        CLOSE row.
 
         The metrics are excursions, not signed returns: a favourable move lands in
         ``max_profit_pct`` on either side of the book, an adverse one in
@@ -1396,23 +1710,33 @@ class TestCheckPosition:
             stop_loss=95.0 if direction == "LONG" else 105.0,
             take_profit=115.0 if direction == "LONG" else 85.0,
         )
-        strategy, _, persistence, brain, _ = _strategy(position=position)
+        strategy, _, persistence, brain, _ = _strategy(
+            position=position,
+            config=make_config(
+                EXECUTOR_API_ENABLED=False,
+                BOT_INTENT_JOURNAL_PATH=str(tmp_path / "bot_position_intents.jsonl"),
+            ),
+        )
         _sync_brain_hook(brain)
 
         reason = await strategy.check_position(price)
 
-        assert reason == expected_reason
+        assert reason is None, "a local exit condition never books a close"
+        assert persistence.async_save_position.await_count == 1
+        assert persistence.async_save_trade_decision.await_count == 0
+        current = strategy.current_position
+        assert current is not None, "the local position must survive the condition"
+
+        request = strategy.take_local_exit_request()
         if expected_reason is None:
-            current = strategy.current_position
-            assert current is not None
-            assert persistence.async_save_position.await_count == 1
+            assert request is None
             assert current.max_profit_pct == pytest.approx(expected_profit)
             assert current.max_drawdown_pct == pytest.approx(expected_drawdown)
             return
-        assert strategy.current_position is None
-        decision = persistence.async_save_trade_decision.await_args.args[0]
-        assert decision.action == f"CLOSE_{direction}"
-        assert decision.reasoning.startswith(f"Position closed: {expected_reason}.")
+        assert request.reason == expected_reason
+        assert request.observed_price == price
+        assert request.state == "unknown"
+        assert strategy.take_state_divergence() is not None
 
     async def test_without_a_position_it_returns_none(self) -> None:
         """No position means no metrics write and no exit."""
@@ -1742,6 +2066,14 @@ class TestResponseValidationMetadata:
                 frozenset({"value_error"}),
                 frozenset({"analysis"}),
                 id="buy-without-execution-fields",
+            ),
+            pytest.param(
+                f"```json\n{json.dumps({'analysis': {'signal': 'BUY', 'confidence': 82, 'entry_price': 77880, 'stop_loss': 76500, 'take_profit': 80640, 'position_size': 0.08, 'risk_reward_ratio': 2.0, 'reasoning': 'Valid setup.', 'trend': {'direction': 'BEARISH', 'strength_4h': 38, 'timeframe_alignment': 'BEARISH'}}})}\n```",
+                "invalid",
+                False,
+                frozenset({"enum"}),
+                frozenset({"analysis.trend.timeframe_alignment"}),
+                id="trend-word-in-timeframe-alignment",
             ),
             pytest.param(
                 f"```json\n{json.dumps({'analysis': {'summary': 'Legacy fallback analysis.'}})}\n```",

@@ -24,6 +24,8 @@ VALID_RESPONSE = (
     '"lesson_learned": "When trend reverses, honor the stop."}'
 )
 
+PARSE_FAILURE_LOG = "Post-mortem: failed to parse LLM response (reason=%s) | preview: %s"
+
 ENTRY_TIME = datetime(2026, 6, 17, 8, 0, 0, tzinfo=timezone.utc)
 EXIT_TIME = ENTRY_TIME + timedelta(hours=20)
 
@@ -144,12 +146,12 @@ def test_post_mortem_result_drops_unknown_fields():
     ("response", "llm_error", "repo_error", "expected_log"),
     [
         ("", None, False, "Post-mortem: empty LLM response"),
-        ("not json at all", None, False, "Post-mortem: failed to parse LLM response"),
+        ("not json at all", None, False, PARSE_FAILURE_LOG),
         (
             '{"llm_analysis": "ok", "expected_vs_actual": "ok", "lesson_learned": "ok"}',
             None,
             False,
-            "Post-mortem: failed to parse LLM response",
+            PARSE_FAILURE_LOG,
         ),
         (None, RuntimeError("API timeout"), False, "Post-mortem analysis failed"),
         (VALID_RESPONSE, None, True, "Post-mortem analysis failed"),

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Post-process Codacy SARIF output for GitHub Code Scanning upload.
 
 Codacy CLI (codacy-analysis-cli) sometimes emits absolute paths or paths
@@ -18,7 +17,6 @@ import json
 import sys
 from pathlib import Path
 from typing import Any
-
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 

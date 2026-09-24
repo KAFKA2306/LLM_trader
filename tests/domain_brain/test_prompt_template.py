@@ -728,6 +728,26 @@ def test_response_template_json_example_is_parser_safe():
     }
 
 
+def test_response_template_documents_the_trend_block_vocabulary():
+    """The trend block must name its allowed values.
+
+    The prompt used to show only an EXAMPLE alignment ("DIVERGENT") and never the
+    allowed set, so the model answered the alignment question with a trend word
+    ("BEARISH"/"BULLISH") — logged as 'contract validation failed:
+    analysis.trend.timeframe_alignment' about once a fortnight.
+    """
+    template = make_manager().build_response_template()
+
+    assert_fragments(template, [
+        "TREND BLOCK (analysis.trend):",
+        "- direction: BULLISH | BEARISH | NEUTRAL — which way the 4h trend points.",
+        "- timeframe_alignment: ALIGNED | MIXED | DIVERGENT — whether the 4h and daily",
+        "timeframes AGREE WITH EACH OTHER, not which way the market points.",
+        "A trend word (BULLISH/BEARISH/NEUTRAL) is INVALID here",
+        "- strength_4h / strength_daily: trend strength 0-100 for each timeframe.",
+    ])
+
+
 def test_response_template_tables_and_hold_semantics():
     """Signal-specific field rules, execution fields and the HOLD contract line."""
     template = make_manager().build_response_template()

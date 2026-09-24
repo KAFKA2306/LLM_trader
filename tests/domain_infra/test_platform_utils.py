@@ -60,8 +60,6 @@ def test_trade_history_store_contract_and_query_guards(tmp_path):
 
     assert store.count() == 0
     assert store.query() == []
-    assert store.get_last_execution_timestamp() is None
-    assert store.get_last_execution_timestamp(actions=()) is None
 
     first = store.insert(decision((now - timedelta(hours=2)).isoformat(), "BUY"))
     store.insert(decision((now - timedelta(hours=1)).isoformat(), "CLOSE_LONG", "BTC/USDC"))
@@ -78,8 +76,6 @@ def test_trade_history_store_contract_and_query_guards(tmp_path):
     assert len(store.query(since=(now - timedelta(minutes=90)).isoformat())) == 2
     assert len(store.query(until=(now - timedelta(minutes=90)).isoformat())) == 1
     assert len(store.export_json()) == 3
-    assert store.get_last_execution_timestamp(actions=("BUY", "SELL")) == now.isoformat()
-    assert store.get_last_execution_timestamp(actions=("CLOSE_LONG",)) == (now - timedelta(hours=1)).isoformat()
 
     with pytest.raises(ValueError, match="Invalid order"):
         store.query(order="DROP TABLE")

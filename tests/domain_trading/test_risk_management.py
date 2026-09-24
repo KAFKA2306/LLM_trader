@@ -346,7 +346,7 @@ def test_position_size_clamp_friction_contract() -> None:
     assert assessment.size_pct == pytest.approx(NEUTRAL_CAP)
     assert assessment.quote_amount == pytest.approx(800.0)
     assert assessment.quantity == pytest.approx(8.0)
-    assert assessment.entry_fee == pytest.approx(0.6)
+    assert assessment.entry_fee is None
 
 
 def test_position_size_clamp_logs_operator_warning() -> None:
@@ -421,7 +421,7 @@ def test_position_size_resolution_matrix(
     assert assessment.size_pct == pytest.approx(expected_pct)
     assert assessment.quote_amount == pytest.approx(expected_quote)
     assert assessment.quantity == pytest.approx(expected_quantity)
-    assert assessment.entry_fee == pytest.approx(expected_quote * FEE_PERCENT)
+    assert assessment.entry_fee is None
     assert len(drain_frictions(manager)) == expected_clamps
 
 

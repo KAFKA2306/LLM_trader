@@ -159,7 +159,7 @@ class PersistenceManager:
                     direction=data.get("direction", "LONG"),
                     symbol=data.get("symbol", "BTC/USDC"),
                     confluence_factors=cf_tuple,
-                    entry_fee=data.get("entry_fee", 0.0),
+                    entry_fee=data.get("entry_fee"),
                     quote_amount=data.get("quote_amount", 0.0),
                     size_pct=data.get("size_pct", 0.0),
                     atr_at_entry=data.get("atr_at_entry", 0.0),
@@ -273,20 +273,6 @@ class PersistenceManager:
         """Load full trade history from SQLite."""
         return self._sqlite.export_json()
 
-    def get_last_execution_timestamp(self, actions: tuple[str, ...] = ("BUY", "SELL")) -> datetime | None:
-        """Return the newest execution timestamp from trade history.
-        Returns:
-            UTC-aware datetime if found, else None.
-        """
-        try:
-            ts = self._sqlite.get_last_execution_timestamp(actions=actions)
-            if not ts:
-                return None
-            return self._ensure_utc(datetime.fromisoformat(ts))
-        except Exception as e:
-            self.logger.error("Failed to read last execution timestamp from SQLite: %s", e)
-            raise
-
     def get_entry_decision_for_position(
         self,
         entry_time: datetime,
@@ -345,7 +331,7 @@ class PersistenceManager:
                     position_size=decision_dict.get("position_size", 0.0),
                     quote_amount=decision_dict.get("quote_amount", 0.0),
                     quantity=decision_dict.get("quantity", 0.0),
-                    fee=decision_dict.get("fee", 0.0),
+                    fee=decision_dict.get("fee"),
                     reasoning=decision_dict.get("reasoning", "")
                 )
 

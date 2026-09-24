@@ -18,7 +18,7 @@ import ArticleLayout from '../layouts/ArticleLayout.astro';
 
 	<section class="section">
 		<h2>What I'm building now</h2>
-		<p>Semantic Signal is an open-source, vision-capable AI trading agent: it reads candlestick charts as images, keeps a semantic vector memory of its own trades, and reasons with bull/bear cases and a deterministic expected-value gate before acting.</p>
+		<p>Semantic Signal is an open-source, vision-capable AI trading agent: it reads candlestick charts as images, keeps semantic memory of closed-trade experiences, and uses a Bull/Bear reasoning prompt alongside deterministic risk limits before acting.</p>
 		<p>Right now I'm hardening the <strong>trade executor</strong> — the separate service that carries the system from simulated capital towards real exchange orders, under the same guard chain and with a verdict journal that confirms what happened to every order. Capital stays simulated until that path proves itself; today it runs against an exchange testnet, and the site says so instead of implying otherwise.</p>
 		<p>More on the project: <a href="/story/">the full development history</a>.</p>
 	</section>

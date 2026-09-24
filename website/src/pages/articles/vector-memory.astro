@@ -8,7 +8,7 @@ import ArticleLayout from '../../layouts/ArticleLayout.astro';
 	meta="Article · first published August 2026 · updated September 2026"
 >
 	<span slot="title">Vector memory: how an LLM trader remembers its mistakes</span>
-	<p slot="subtitle" class="subtitle">A stateless LLM is just a calculator. This one keeps a semantic memory of every closed trade — and reviews its own history before acting.</p>
+	<p slot="subtitle" class="subtitle">This project stores closed-trade experiences in semantic memory and retrieves the most relevant history before acting.</p>
 
 	<section class="section">
 		<h2>The problem with stateless bots</h2>
@@ -20,7 +20,7 @@ import ArticleLayout from '../../layouts/ArticleLayout.astro';
 		<h2>Every closed trade becomes a vector</h2>
 		<p>When a trade closes, its full context and outcome are embedded with <code>BAAI/bge-base-en-v1.5</code> — <strong>768 dimensions</strong> — and stored in ChromaDB. Three collections carry the memory:</p>
 		<ul>
-			<li><code>trading_experiences</code> — every closed trade with its context, outcome and P&amp;L;</li>
+			<li><code>trading_experiences</code> — closed-trade experiences with their context, outcome and P&amp;L;</li>
 			<li><code>semantic_rules</code> — rules the reflection engine has written from results, in plain language;</li>
 			<li><code>system_constraints_rejections</code> — signals that were refused, and the reason.</li>
 		</ul>

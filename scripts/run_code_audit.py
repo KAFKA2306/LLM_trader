@@ -41,12 +41,13 @@ class CodeAuditor:
                 text=True,
                 encoding="utf-8",
                 errors="replace",
+                check=False,
             )
             stdout = result.stdout or ""
             stderr = result.stderr or ""
             combined = (stdout + "\n" + stderr).strip()
             return result.returncode, combined
-        except Exception as err:
+        except (OSError, subprocess.SubprocessError) as err:
             return 1, f"Failed to execute command {' '.join(cmd)}: {err}"
 
     def run_ruff(self) -> dict[str, str | int]:
@@ -101,7 +102,7 @@ class CodeAuditor:
 
         report_sections: list[str] = [
             "=" * 80,
-            f"  LLM_trader Code Audit & Static Analysis Report",
+            "  LLM_trader Code Audit & Static Analysis Report",
             f"  Generated: {timestamp}",
             f"  Target Paths: {', '.join(TARGET_PATHS)}",
             "=" * 80,

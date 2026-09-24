@@ -38,7 +38,7 @@ class DashboardServer:
         unified_parser=None,
         persistence=None,
         exchange_manager=None,
-        host="0.0.0.0",  # nosec B104
+        host="0.0.0.0",
         port=8000,
         force_analysis_event=None,
         config_path=None,

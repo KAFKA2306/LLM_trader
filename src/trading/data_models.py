@@ -74,7 +74,7 @@ class Position(SerializableMixin):
     symbol: str
     conditions_at_entry: MarketConditions
     confluence_factors: tuple = field(default_factory=tuple)
-    entry_fee: float = 0.0
+    entry_fee: float | None = None
     quote_amount: float = 0.0
     size_pct: float = 0.0
     atr_at_entry: float = 0.0
@@ -115,13 +115,6 @@ class Position(SerializableMixin):
         if pnl > 0 and pnl > self.max_profit_pct:
             self.max_profit_pct = pnl
 
-    def calculate_closing_fee(self, close_price: float, fee_percent: float) -> float:
-        """Calculate the transaction fee for closing this position.
-        Returns:
-            Fee amount in USDT
-        """
-        return close_price * self.size * fee_percent
-
     def is_stop_hit(self, current_price: float) -> bool:
         """Check if stop loss is hit."""
         if self.direction == "LONG":
@@ -148,7 +141,7 @@ class TradeDecision(SerializableMixin):
     position_size: float = 0.0
     quote_amount: float = 0.0
     quantity: float = 0.0
-    fee: float = 0.0
+    fee: float | None = None
     reasoning: str = ""
     indicators_json: str | dict[str, Any] | None = None
     order_id: str | None = None
@@ -284,6 +277,31 @@ class TradingMemory(SerializableMixin):
 
         return "\n".join(lines)
 
+@dataclass(frozen=True)
+class LocalExitRequest:
+    """A LOCAL exit condition that fired but must NOT be booked locally.
+
+    Wave 3: the price that tripped the bracket is an observation, not an exit price.
+    The request is what the monitor and the operator see while the local position
+    stays exactly as it was, waiting for the executor's fill evidence.
+
+    Wave 4: the analysis ``CLOSE`` signal produces the same object with
+    ``reason="analysis_signal"`` and ``state="unknown"`` when the executor
+    integration is off — there is no confirmation channel at all then, so nothing is
+    booked and the position stays.
+
+    Lives in ``data_models`` (not ``trading_strategy``) so the position-management
+    mixin can build it without a circular import; ``trading_strategy`` re-exports it.
+    """
+
+    reason: str
+    observed_price: float
+    state: str
+    intent_key: str
+    order_id: str | None
+    detail: str
+
+
 @dataclass(slots=True)
 class VectorSearchResult(SerializableMixin):
     """Represents a search result from VectorMemory."""
@@ -332,7 +350,7 @@ class RiskAssessment(SerializableMixin):
     quantity: float
     size_pct: float
     quote_amount: float
-    entry_fee: float
+    entry_fee: float | None
     sl_distance_pct: float
     tp_distance_pct: float
     rr_ratio: float

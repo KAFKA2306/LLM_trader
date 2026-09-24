@@ -1,8 +1,3 @@
-/* global vis, DOMPurify */
-/**
- * Decision Pathways panel — multi-source hierarchical graph + synopsis + detail.
- * Hierarchical multi-source decision graph for Brain Activity.
- */
 
 let network = null;
 let nodesDS = null;
@@ -73,9 +68,6 @@ function escapeHtml(text) {
 function toVisNode(n) {
     const data = n.data || {};
     const rawLabel = n.label || n.id;
-    // Truncate long labels to prevent overlap; full text on hover via title.
-    // Leaf nodes (experience, journal, rule, blocked) get shorter labels since
-    // they pack densely at the bottom level.
     const isLeaf = ['experience', 'journal', 'rule', 'blocked'].includes(n.type);
     const maxLen = isLeaf ? 18 : 28;
     const label = rawLabel.length > maxLen ? rawLabel.substring(0, maxLen - 1) + '…' : rawLabel;
@@ -92,8 +84,6 @@ function toVisNode(n) {
         font: { size: 14, color: '#e6edf3', face: 'Inter, sans-serif', strokeWidth: 2, strokeColor: '#0d1117' },
         borderWidth: 2,
         margin: { top: 8, bottom: 8, left: 12, right: 12 },
-        // Pre-compute positions from level to avoid relying on layout engine
-        // for dynamically-added nodes (vis-network doesn't reposition them).
         x: 0,
         y: level * 160,
         raw: data,
@@ -132,9 +122,6 @@ function ensureNetwork() {
     const container = document.getElementById('decision-graph');
     if (!container) return null;
 
-    // Never initialize vis-network when the container has zero dimensions
-    // (e.g. Brain tab is hidden with display:none at page load). The canvas
-    // will get 0×0 and fit() cannot recover. Defer until the tab is visible.
     const rect = container.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return null;
 
@@ -317,8 +304,6 @@ function updateGraph(graph) {
     edgesDS.clear();
     nodesDS.add(visNodes);
     edgesDS.add(visEdges);
-    // Spread same-level nodes horizontally — vis-network doesn't reposition
-    // dynamically-added nodes with hierarchical layout + physics off.
     const levelNodes = Object.create(null);
     visNodes.forEach(function (vn) {
         const lv = vn.level || 0;
@@ -327,8 +312,6 @@ function updateGraph(graph) {
     });
     Object.keys(levelNodes).forEach(function (lv) {
         const group = levelNodes[lv];
-        // Size row to fill available space with a generous minimum spacing
-        // to prevent label overlap. Wider-than-container rows scroll naturally.
         const container = document.getElementById('decision-graph');
         const containerW = container ? container.getBoundingClientRect().width : 600;
         const minSpacing = 120;
@@ -430,8 +413,6 @@ function renderError(err) {
 }
 
 export async function initDecisionPathwaysPanel() {
-    // Expose updateDecisionPathways early so tab-switch handlers can call it
-    // even before the vis-network is created (deferred until tab is visible).
     window.updateDecisionPathways = updateDecisionPathways;
     ensureNetwork();
     renderDetailEmpty();

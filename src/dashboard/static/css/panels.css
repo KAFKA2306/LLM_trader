@@ -1,4 +1,3 @@
-/* KPI Grid */
 .kpi-grid {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
@@ -86,7 +85,6 @@
     color: var(--accent-danger);
 }
 
-/* Panels */
 .panel {
     background: var(--bg-dark-2);
     border: 1px solid var(--border-subtle);
@@ -197,7 +195,6 @@
     display: none;
 }
 
-/* Visual Box - Chart Container */
 .visual-box {
     flex: 1;
     display: flex;
@@ -223,7 +220,6 @@
     font-size: 13px;
 }
 
-/* Vector Memory Panel Stats Cards */
 .vector-stats {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -272,7 +268,6 @@
     color: var(--accent-danger);
 }
 
-/* Position Panel */
 .no-position {
     display: flex;
     align-items: center;
@@ -477,15 +472,12 @@
     color: var(--text-muted);
 }
 
-/* Prompt Content */
-
 .meta-info {
     font-size: 10px;
     color: var(--text-dim);
     margin-right: 10px;
 }
 
-/* Discord-style Response Content */
 .discord-content {
     padding: 20px;
     overflow-y: auto;
@@ -565,7 +557,6 @@
     border-radius: 4px;
 }
 
-/* Statistics Panel */
 .stats-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -622,7 +613,6 @@
     color: var(--text-muted) !important;
 }
 
-/* News Panel */
 .news-grid {
     display: flex;
     flex-direction: column;
@@ -704,8 +694,6 @@
     color: var(--text-dim);
     margin-top: 10px;
 }
-
-/* ── Trade Journal (Post-Mortem) ── */
 
 .pm-toolbar {
     margin-bottom: 16px;
@@ -866,8 +854,6 @@
     padding: 0 2px;
 }
 
-/* ─── Live Console Panel ──────────────────────────────────────────── */
-
 .console-toolbar {
     display: flex;
     align-items: center;
@@ -932,7 +918,6 @@
     cursor: pointer;
 }
 
-/* Shared console container — used by Live Console, Last Prompt, Last Response */
 .console-container {
     background: #0a0c10;
     border: 1px solid var(--border-subtle);
@@ -947,7 +932,6 @@
     word-break: break-word;
 }
 
-/* Prompt/response content: slightly larger for readability */
 .console-content {
     font-size: 13px;
     line-height: 1.7;
@@ -984,8 +968,6 @@
 .console-line.lvl-other {
     border-left-color: transparent;
 }
-
-/* ─── Console content markdown (prompt / response) ────────────────── */
 
 .console-content h1,
 .console-content h2,
@@ -1033,8 +1015,6 @@
     margin: 10px 0;
     border-radius: 0 6px 6px 0;
 }
-
-/* ─── Mobile ──────────────────────────────────────────────────────── */
 
 @media (max-width: 768px) {
     .console-container {

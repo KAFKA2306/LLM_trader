@@ -12,7 +12,7 @@ const TESTS_SKIPPED = '17';
 
 <Layout
 	title="The Full Story & Technology — Semantic Signal"
-	description="The complete engineering history of an open-source, vision-capable LLM crypto bot: real commit dates, the indicator engine, the expected-value gate, and an honest status report. Trades simulated capital by default."
+	description="The complete engineering history of an open-source, vision-capable LLM crypto bot: real commit dates, the indicator engine, deterministic risk limits, and an honest status report. Trades simulated capital by default."
 >
 	<article class="article-container">
 		<header class="article-header">
@@ -114,11 +114,8 @@ def supertrend_numba(high: np.ndarray, low: np.ndarray, close: np.ndarray,
 			</div>
 			<p>Anything above <strong>1.5</strong> is tagged <code>⚠️ high surprise</code> in vector memory so the model discounts it later (<code>src/trading/brain_reflection.py</code>). The bot learns from what it understood, not from what it got lucky on.</p>
 
-			<h3>The expected-value gate</h3>
-			<div class="formula-box">
-				EV = (Win Rate × Average Win) − ((1 − Win Rate) × Average Loss) − Fees
-			</div>
-			<p>EV is computed from the bot's own closed-trade history. If it is negative, the signal is rejected outright — deterministic arithmetic that overrides the model, not a suggestion. This is now the <em>only</em> hard gate: the old fixed 1.5 R/R floor was removed (<code>config/config.ini → min_rr_entry = 0.0</code>) and replaced by a floor the brain derives from its own expectancy once it has enough losing low-R/R trades to learn from.</p>
+			<h3>What constrains an entry</h3>
+			<p>The project prompts the model to discuss expected value, but the repository does not currently enforce a deterministic expected-value gate. Deterministic checks concern the symbol whitelist, position caps and validated stop/target values. The optional <code>min_rr_entry</code> setting is currently <code>0.0</code>, so this page does not present it as an active entry gate.</p>
 
 			<h3>What is <em>not</em> in here</h3>
 			<ul>
@@ -153,7 +150,7 @@ python start.py                 # dashboard at http://localhost:8000</code></pre
 			<p>Kept visible on purpose, because a page that silently edits its own history is worth less than one that shows its corrections:</p>
 			<ul>
 				<li>"Kelly Criterion position sizing" — removed. No Kelly code exists in the repo.</li>
-				<li>"a hard 1.5 R/R floor rejects the signal" — no longer true; EV is the only hard gate and the R/R floor is learned from expectancy.</li>
+				<li>"a hard expected-value or 1.5 R/R gate rejects the signal" — removed. The current code does not enforce an expected-value gate, and <code>min_rr_entry = 0.0</code>.</li>
 				<li>"how the system earns real money" — removed. The executor runs against an exchange testnet, and no real capital is at stake.</li>
 				<li>"1,270 automated tests" (August) → {TESTS_TOTAL} today. The number moves with the code, so it is now generated from a test run, not typed from memory.</li>
 				<li>Chart vision and vector memory were previously dated February–April 2026. The code says 22 Dec 2025 and 16 May 2026 — the timeline above is the one that matches <code>git log</code>.</li>

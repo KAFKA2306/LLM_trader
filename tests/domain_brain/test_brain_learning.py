@@ -16,12 +16,31 @@ import pytest
 from src.trading.brain import TradingBrainService
 from src.trading.brain_context import BrainContextProvider
 from src.trading.data_models import ExitExecutionContext, MarketSnapshot, TradeDecision
+from src.trading.executor_reconciliation import ExitEvidence
 from src.trading.stop_loss_tightening_policy import (
     StopLossTighteningPolicy,
     TighteningEvaluation,
 )
 from src.trading.vector_memory import VectorMemoryService
 from tests.conftest import make_market_conditions, make_position
+
+
+def proven_exit(**overrides) -> ExitEvidence:
+    """Evidence of a PROVEN exit: real fill price + amount + stable event id.
+
+    Wave 5: the brain may only learn from a close with evidence (see the guard tests at
+    the end of the closed-trade section). Every test below that asserts LEARNING has to
+    pass this — a close without it is refused.
+    """
+    values = {
+        "source": "executor_exit_journal",
+        "price": 52000.0,
+        "quantity": 0.01,
+        "event_id": "probe-event-1",
+    }
+    values.update(overrides)
+    return ExitEvidence(**values)
+
 
 HARD_15M = ExitExecutionContext(
     stop_loss_type="hard",
@@ -391,6 +410,7 @@ def test_update_from_closed_trade_stores_exit_profile_and_entry_snapshot():
         close_reason="take_profit",
         entry_decision=ENTRY_DECISION,
         market_conditions=make_market_conditions(adx=30.0, trend_direction="BULLISH"),
+        evidence=proven_exit(),
     )
 
     stored = brain.vector_memory.store_experience.call_args.kwargs
@@ -425,6 +445,7 @@ def test_update_from_closed_trade_without_entry_decision_falls_back_to_position(
         close_price=52000.0,
         close_reason="take_profit",
         market_conditions=make_market_conditions(adx=30.0),
+        evidence=proven_exit(),
     )
 
     stored = brain.vector_memory.store_experience.call_args.kwargs
@@ -460,6 +481,7 @@ def test_update_from_closed_trade_resolves_exit_profile_from_position_then_defau
         close_price=52000.0,
         close_reason="take_profit",
         market_conditions=make_market_conditions(adx=30.0),
+        evidence=proven_exit(),
     )
 
     metadata = brain.vector_memory.store_experience.call_args.kwargs["metadata"]
@@ -491,6 +513,7 @@ def test_update_from_closed_trade_records_normalised_level_distances(conditions,
         close_price=52000.0,
         close_reason="take_profit",
         market_conditions=make_market_conditions(**conditions),
+        evidence=proven_exit(),
     )
 
     metadata = brain.vector_memory.store_experience.call_args.kwargs["metadata"]
@@ -549,6 +572,7 @@ def test_reflection_fires_on_exact_closed_trade_multiple(timeframe_minutes, star
         close_price=52000.0,
         close_reason="take_profit",
         market_conditions=make_market_conditions(adx=30.0, trend_direction="BULLISH"),
+        evidence=proven_exit(),
     )
 
     triggers = (
@@ -570,6 +594,7 @@ def test_update_from_closed_trade_propagates_reflection_failure_after_storing():
             close_price=52000.0,
             close_reason="take_profit",
             market_conditions=make_market_conditions(adx=30.0),
+            evidence=proven_exit(),
         )
 
     assert brain.vector_memory.store_experience.called is True
@@ -1213,3 +1238,113 @@ def test_blocked_trade_feedback_formatter_raises_on_non_numeric_rr():
 
     with pytest.raises(TypeError, match="must be real number, not str"):
         VectorMemoryService.get_blocked_trade_feedback(memory, n=5, max_age_hours=168)
+
+
+
+
+class TestBrainRefusesUnprovenLessons:
+    """A close without evidence never becomes an experience (the 2026-09-21 class).
+
+    The guard is enforced in ``update_from_closed_trade`` as defence in depth: the close
+    path applies the same rule, but the brain must not be teachable by ANY caller that
+    has no proven exit fact behind it.
+    """
+
+    def test_without_evidence_nothing_is_stored_and_the_skip_is_logged(self):
+        brain = learning_brain()
+        logger = brain.logger
+
+        stored = brain.update_from_closed_trade(
+            position=make_position(),
+            close_price=52000.0,
+            close_reason="take_profit",
+            market_conditions=make_market_conditions(adx=30.0),
+        )
+
+        assert stored is False
+        brain.vector_memory.store_experience.assert_not_called()
+        brain.vector_memory.update_rule_validation_feedback.assert_not_called()
+        messages = [str(call.args) for call in logger.warning.call_args_list]
+        assert any("Lesson skipped: no exit evidence" in message for message in messages)
+        assert any("no exit evidence was recorded" in message for message in messages)
+
+    @pytest.mark.parametrize(
+        "evidence",
+        [
+            pytest.param(None, id="no-evidence-object"),
+            pytest.param(proven_exit(source="local_monitor"), id="non-confirming-source"),
+            pytest.param(proven_exit(source="analysis_signal"), id="analysis-signal-source"),
+            pytest.param(proven_exit(price=None), id="unknown-price"),
+            pytest.param(proven_exit(price=0.0), id="zero-price"),
+            pytest.param(proven_exit(quantity=None), id="unknown-quantity"),
+            pytest.param(proven_exit(quantity=float("nan")), id="nan-quantity"),
+            pytest.param(proven_exit(event_id=None), id="no-stable-event-id"),
+            pytest.param("not-evidence", id="wrong-type"),
+        ],
+    )
+    def test_unusable_evidence_is_refused(self, evidence):
+        brain = learning_brain()
+
+        stored = brain.update_from_closed_trade(
+            position=make_position(),
+            close_price=52000.0,
+            close_reason="stop_loss",
+            market_conditions=make_market_conditions(adx=30.0),
+            evidence=evidence,
+        )
+
+        assert stored is False
+        brain.vector_memory.store_experience.assert_not_called()
+
+    def test_proven_evidence_learns_exactly_once_per_call(self):
+        brain = learning_brain()
+
+        first = brain.update_from_closed_trade(
+            position=make_position(),
+            close_price=52000.0,
+            close_reason="take_profit",
+            market_conditions=make_market_conditions(adx=30.0),
+            evidence=proven_exit(),
+        )
+        second = brain.update_from_closed_trade(
+            position=make_position(),
+            close_price=52000.0,
+            close_reason="take_profit",
+            market_conditions=make_market_conditions(adx=30.0),
+            evidence=proven_exit(),
+        )
+
+        assert (first, second) == (True, True)
+        assert brain.vector_memory.store_experience.call_count == 2
+
+    def test_mapping_evidence_with_the_same_fields_is_accepted(self):
+        """A caller that only produces a dict is validated with the same rules."""
+        brain = learning_brain()
+
+        stored = brain.update_from_closed_trade(
+            position=make_position(),
+            close_price=52000.0,
+            close_reason="take_profit",
+            market_conditions=make_market_conditions(adx=30.0),
+            evidence={
+                "source": "executor_exit_journal",
+                "price": 52000.0,
+                "quantity": 0.01,
+                "event_id": "dict-event",
+            },
+        )
+        refused = brain.update_from_closed_trade(
+            position=make_position(),
+            close_price=52000.0,
+            close_reason="take_profit",
+            market_conditions=make_market_conditions(adx=30.0),
+            evidence={
+                "source": "executor_exit_journal",
+                "price": 52000.0,
+                "quantity": None,
+                "event_id": "dict-event-2",
+            },
+        )
+
+        assert (stored, refused) == (True, False)
+        assert brain.vector_memory.store_experience.call_count == 1

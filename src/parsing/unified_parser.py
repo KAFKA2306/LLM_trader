@@ -5,7 +5,7 @@ Eliminates duplication and unnecessary delegation layers.
 import json
 import math
 import re
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import ValidationError
 
@@ -125,6 +125,117 @@ class UnifiedParser:
                 return blocks
             blocks.append(text[body_start:end].strip())
             index = end + 3
+
+    _CONTROL_CHAR_ESCAPES: ClassVar[dict[str, str]] = {
+        "\n": "\\n",
+        "\r": "\\r",
+        "\t": "\\t",
+        "\b": "\\b",
+        "\f": "\\f",
+    }
+
+    @classmethod
+    def repair_raw_control_characters(cls, text: str) -> str:
+        """Escape raw control characters found INSIDE JSON string literals.
+
+        Structure is preserved: whitespace between tokens is untouched, only
+        characters that sit inside a string literal are rewritten to their
+        escaped forms. Text content itself is never altered or invented.
+        Returns:
+            The input with raw control characters escaped inside strings.
+        """
+        if not text:
+            return text
+        result: list[str] = []
+        in_string = False
+        escaped = False
+        for char in text:
+            if not in_string:
+                result.append(char)
+                if char == '"':
+                    in_string = True
+                continue
+            if escaped:
+                result.append(char)
+                escaped = False
+                continue
+            if char == "\\":
+                result.append(char)
+                escaped = True
+                continue
+            if char == '"':
+                result.append(char)
+                in_string = False
+                continue
+            replacement = cls._CONTROL_CHAR_ESCAPES.get(char)
+            if replacement is not None:
+                result.append(replacement)
+            elif char < " ":
+                result.append(f"\\u{ord(char):04x}")
+            else:
+                result.append(char)
+        return "".join(result)
+
+    @classmethod
+    def _loads_lenient(cls, text: str) -> dict[str, Any] | None:
+        """Decode a JSON object from one candidate, tolerating raw control chars.
+
+        Tries strict decoding, then decoding after escaping raw control
+        characters inside strings, and finally ``raw_decode`` from each ``{``
+        so leading prose or an earlier broken object does not hide a valid one.
+        Returns:
+            Parsed dict, or None when the candidate is not decodable.
+        """
+        if not text:
+            return None
+        for candidate in (text, cls.repair_raw_control_characters(text)):
+            stripped = candidate.strip()
+            if not stripped:
+                continue
+            try:
+                decoded = json.loads(stripped)
+            except (json.JSONDecodeError, ValueError):
+                decoded = None
+            if isinstance(decoded, dict):
+                return decoded
+            for brace in range(len(stripped)):
+                if stripped[brace] != "{":
+                    continue
+                try:
+                    decoded, _end = json.JSONDecoder().raw_decode(stripped, brace)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if isinstance(decoded, dict):
+                    return decoded
+        return None
+
+    @classmethod
+    def parse_json_object(cls, text: str, unwrap_key: str | None = None) -> dict[str, Any] | None:
+        """Extract a JSON object from a model response with structure-only repair.
+
+        Candidates in order: every ```json fenced block (last parseable wins,
+        matching ``extract_json_block``), the whole response, then the response
+        from its first ``{``. Each candidate is decoded strictly and, failing
+        that, after raw control characters inside string values are escaped.
+        Returns:
+            Parsed JSON object or None when nothing decodes.
+        """
+        if not text or not text.strip():
+            return None
+        stripped = text.strip()
+        candidates = list(reversed(cls._iter_json_blocks(text)))
+        candidates.append(stripped)
+        brace = stripped.find("{")
+        if brace > 0:
+            candidates.append(stripped[brace:])
+        for candidate in candidates:
+            data = cls._loads_lenient(candidate)
+            if data is None:
+                continue
+            if unwrap_key and isinstance(data.get(unwrap_key), dict):
+                return data[unwrap_key]
+            return data
+        return None
 
     @staticmethod
     def extract_json_block(text: str, unwrap_key: str | None = None) -> dict[str, Any] | None:

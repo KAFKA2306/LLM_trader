@@ -41,7 +41,6 @@ python start.py               # dashboard at http://localhost:8000
 | `scripts/start_script_main_macos.sh` | Start the bot (macOS) |
 | `scripts/run_all_tests.sh` | Run full test suite in `.venv` |
 | `scripts/query_trade_history.py` | CLI utility to inspect SQLite trade history |
-| `scripts/rotate_journals.py` | Auto-rotate AI agent journal files (runs on startup) |
 </details>
 
 ### Runtime Controls
@@ -85,13 +84,13 @@ python start.py               # dashboard at http://localhost:8000
 
 - **📊 Live Dashboard** — FastAPI + WebSocket real-time SPA at `0.0.0.0:8000` (or [semanticsignal.qrak.org](https://semanticsignal.qrak.org)). Nine tabs with brain activity, last prompt/response, position state, performance stats, news, market data, and memory bank.
 
-- **🛡️ Risk Pipeline** — Pre-execution guard chain (symbol whitelist, max position size, cooldown) + dynamic SL/TP scaling with minimum 1.5 R:R enforced. Soft exits at candle close, hard exits at configurable intervals against live ticker price.
+- **🛡️ Risk Pipeline** — Pre-execution guard chain (symbol whitelist, max position size) + dynamic SL/TP scaling with minimum 1.5 R:R enforced. Soft exits at candle close, hard exits at configurable intervals against live ticker price.
 
 - **🔄 Multi-Provider AI Routing** — Primary: DeepSeek V4.1 Flash (`deepseek-flash`, native chart vision). Fallback chain through Google Gemini / OpenRouter / LM Studio. Chart vision support on every provider that allows it.
 
 - **🧪 1,380+ Tests** — Fully mocked test suite covering LLM output corruption, async races, rate-limit backoff, vector-DB boundaries, friction-reporting, closed-loop feedback, AST code indexing, and positional market types (spot / perpetual futures).
 
-- **🤖 Multi-Agent AI Development** — Eight specialized AI agents (Supervisor 🧠 + Bolt ⚡, Palette 🎨, Sentinel 🛡️, Refactor ✨, Concise ✂️, Smoke Tests 🔥, Bugfixer 🐛) coordinate via a Supervisor 🧠. Each agent writes journal entries to `.ai/` — the project's collective memory. Journals auto-rotate on startup.
+- **🗂️ Layered Agent Documentation** — Root [`AGENTS.md`](AGENTS.md) carries the system-wide rules and a map into per-package `AGENTS.md` files (`src/trading/`, `src/analyzer/`, `src/dashboard/`, `src/managers/`, `src/indicators/`, `src/rag/`, `src/trading/guards/`), so a coding model reads only the package it touches instead of the whole manual.
 
 ---
 
@@ -117,7 +116,7 @@ flowchart TB
     end
     subgraph Execution["Paper Execution"]
         RP["Risk Manager<br/>SL/TP, sizing, R:R,<br/>friction tracking"]
-        GP["Guard Pipeline<br/>Symbol → Size → Cooldown"]
+        GP["Guard Pipeline<br/>Symbol → Size"]
         STRAT["Trading Strategy<br/>ExitMonitor +<br/>PositionStatusMonitor"]
     end
     Data --> Analysis
@@ -148,7 +147,6 @@ flowchart TB
 | `src/analyzer/trend_validator.py` | Cross-checks LLM-reported trend strength against computed ADX |
 | `src/analyzer/pattern_quality_scorer.py` | Deterministic pattern quality scoring replacing LLM's self-reported score |
 | `src/notifiers/notifier.py` | Discord notifications with message expiration tracking |
-| `scripts/rotate_journals.py` | Auto-rotation of AI agent journal files |
 
 ---
 
@@ -205,22 +203,23 @@ Required API keys in `keys.env`:
 
 ---
 
-## Multi-Agent AI Development
+## Agent Documentation Map
 
-The codebase uses a **Supervisor + 7 specialized agents** pattern for AI-assisted development:
+Contributors (human or model) get the rules in layers, so nobody has to read the whole manual:
 
-| Agent | Emoji | Scope | Journal |
-|-------|-------|-------|---------|
-| **Supervisor** | 🧠 | Orchestrator — reads all journals, delegates to the right specialist | `.ai/supervisor.md` |
-| **Bolt** | ⚡ | Performance — caching, async patterns, I/O, numpy, hot paths | `.ai/journal.md` |
-| **Palette** | 🎨 | UX & Accessibility — dashboard HTML/CSS/JS, ARIA, responsive design | `.ai/palette-journal.md` |
-| **Sentinel** | 🛡️ | Security — auth, CSP, rate limiting, XSS, input validation | `.ai/sentinel-journal.md` |
-| **Refactor** | ✨ | Clean Code — isinstance chains, DRY violations, DI enforcement | `.ai/refactor-journal.md` |
-| **Concise** | ✂️ | Code Line Reduction — DRY abstractions, mixins, dispatch tables | `.ai/concise-journal.md` |
-| **Smoke Tests** | 🔥 | Fast Pre-Flight — syntax compilation, targeted unit tests, linter gates (< 5s) | `.ai/smoketest-journal.md` |
-| **Bugfixer** | 🐛 | Bugs & Regressions — verifying changes, running full suite | `.ai/bugfixing-journal.md` |
+| File | Scope |
+|------|-------|
+| [`AGENTS.md`](AGENTS.md) | Authority, system overview, data flow, config, operational rules, code/security conventions, verification gates, map |
+| [`src/AGENTS.md`](src/AGENTS.md) | Cross-package regression contracts (`parsing/`, `utils/`, `notifiers/`, `rag/`, `dashboard/`) |
+| [`src/trading/AGENTS.md`](src/trading/AGENTS.md) | Trading brain, strategy, position management, monitors, notifiers |
+| [`src/trading/guards/AGENTS.md`](src/trading/guards/AGENTS.md) | Pre-execution guard pipeline |
+| [`src/analyzer/AGENTS.md`](src/analyzer/AGENTS.md) | Analysis engine, prompt templates, chart vision |
+| [`src/indicators/AGENTS.md`](src/indicators/AGENTS.md) | Indicator computation and caching |
+| [`src/managers/AGENTS.md`](src/managers/AGENTS.md) | Persistence, SQLite history, exchange adapters |
+| [`src/rag/AGENTS.md`](src/rag/AGENTS.md) | Vector memory, crawl4ai news ingestion, market components |
+| [`src/dashboard/AGENTS.md`](src/dashboard/AGENTS.md) | FastAPI dashboard, auth, UI and accessibility conventions |
 
-Journals auto-rotate on startup via `scripts/rotate_journals.py`. The full architecture blueprint lives in [`AGENTS.md`](AGENTS.md).
+Each file links back to the root; the root never duplicates package detail.
 
 ---
 
