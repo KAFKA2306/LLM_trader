@@ -231,8 +231,6 @@ def client(dashboard_server) -> TestClient:
 
 
 def test_build_current_market_context_renders_indicators_and_exit_execution(tmp_path, monkeypatch):
-    # is_weekend follows the UTC clock, so freeze it to a Wednesday: otherwise the
-    # rendered context grows a "+ Weekend Low Volume" segment every Saturday and Sunday.
     class _Sroda(datetime):
         @classmethod
         def now(cls, tz=None):

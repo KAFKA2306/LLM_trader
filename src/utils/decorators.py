@@ -72,7 +72,7 @@ class _RetryContext:
     @staticmethod
     def _add_jitter(delay: float) -> float:
         """Add ±25% random jitter to prevent thundering herd on concurrent retries."""
-        return delay * (0.75 + random.random() * 0.5)  # nosec B311
+        return delay * (0.75 + random.random() * 0.5)
 
     def __init__(self, instance, func, args, kwargs, max_retries, initial_delay, backoff_factor, max_delay):
         self.logger = instance.logger

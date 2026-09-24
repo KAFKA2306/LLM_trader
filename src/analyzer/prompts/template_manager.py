@@ -817,6 +817,16 @@ EXECUTION FIELDS (for automated trade execution bots):
 - reduce_only: false (new positions), true (CLOSE only). Prevents position flipping.
 - leverage: 1 for spot, >1 for futures. Use configured leverage. Default: 1.
 
+TREND BLOCK (analysis.trend):
+- direction: BULLISH | BEARISH | NEUTRAL — which way the 4h trend points.
+- timeframe_alignment: ALIGNED | MIXED | DIVERGENT — whether the 4h and daily
+  timeframes AGREE WITH EACH OTHER, not which way the market points. ALIGNED =
+  both point the same way; MIXED = partially conflicting; DIVERGENT = they
+  contradict each other. A trend word (BULLISH/BEARISH/NEUTRAL) is INVALID here
+  and fails the response contract — the alignment question is about agreement
+  between timeframes, not direction.
+- strength_4h / strength_daily: trend strength 0-100 for each timeframe.
+
 HOLD semantics: HOLD(no position) = no position and no pending/future order; if the entry isn't valid at the current price, stay flat. HOLD(open position) = no execution change and must not repeat stale SL/TP values. UPDATE is for an open position only.
 
 CONFLUENCE (0-100 per factor, 0=opposes, 50=neutral, 100=strong):

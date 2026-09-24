@@ -34,8 +34,7 @@
             overflow-x:hidden;
         }
 
-        /* ── Hero ── */
-        .hero{
+                .hero{
             position:relative;
             min-height:100vh;
             display:flex;
@@ -129,8 +128,7 @@
         .hero-stat .num{font-size:2em;font-weight:700;color:var(--cyan);font-family:var(--mono)}
         .hero-stat .lbl{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-top:4px}
 
-        /* ── Section ── */
-        section{padding:80px 20px}
+                section{padding:80px 20px}
         .container{max-width:1100px;margin:0 auto}
         h2{
             font-size:2em;
@@ -146,8 +144,7 @@
             max-width:600px;
         }
 
-        /* ── Feature Grid ── */
-        .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
+                .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
         .card{
             background:var(--bg2);
             border:1px solid var(--border);
@@ -160,8 +157,7 @@
         .card h3{font-size:1.05em;margin-bottom:8px;color:var(--text)}
         .card p{font-size:.9em;color:var(--muted);line-height:1.55}
 
-        /* ── Comparison ── */
-        .compare{
+                .compare{
             display:grid;
             grid-template-columns:1fr 1fr;
             gap:16px;
@@ -199,8 +195,7 @@
         }
         .compare-note strong{color:var(--text)}
 
-        /* ── Claim Banner ── */
-        .claim{
+                .claim{
             margin-top:16px;
             font-size:clamp(1em,2.4vw,1.15em);
             font-weight:600;
@@ -208,8 +203,7 @@
         }
         .claim em{color:var(--cyan);font-style:normal}
 
-        /* ── Code Block ── */
-        pre{
+                pre{
             background:var(--bg3);
             border:1px solid var(--border);
             border-radius:10px;
@@ -224,8 +218,7 @@
         pre .hl2{color:var(--green)}
         pre .dim{opacity:.4}
 
-        /* ── CTA Section ── */
-        .cta{
+                .cta{
             text-align:center;
             padding:80px 20px;
             background:linear-gradient(180deg,transparent 0%,rgba(0,240,255,.03) 50%,transparent 100%);
@@ -235,8 +228,7 @@
         .cta h2{margin-bottom:8px}
         .cta .cta-buttons{display:flex;gap:12px;flex-wrap:wrap;justify-content:center;margin-top:24px}
 
-        /* ── About ── */
-        .about{
+                .about{
             display:flex;
             gap:32px;
             align-items:flex-start;
@@ -256,8 +248,7 @@
         .about-text h3{margin-bottom:8px}
         .about-text p{color:var(--muted);font-size:.95em;margin-bottom:10px}
 
-        /* ── Footer ── */
-        footer{
+                footer{
             text-align:center;
             padding:40px 20px;
             color:var(--muted);
@@ -267,8 +258,7 @@
         footer a{color:var(--cyan);text-decoration:none}
         footer a:hover{text-decoration:underline}
 
-        /* ── Terminal Effect ── */
-        .terminal-box{
+                .terminal-box{
             background:var(--bg2);
             border:1px solid var(--border);
             border-radius:12px;
@@ -298,8 +288,7 @@
         .terminal-body .prompt{color:var(--green)}
         .terminal-body .cmd{color:var(--cyan)}
 
-        /* ── Responsive ── */
-        @media(max-width:768px){
+                @media(max-width:768px){
             .hero-stats{gap:24px}
             .hero-stat .num{font-size:1.5em}
             .compare{grid-template-columns:1fr}
@@ -308,7 +297,6 @@
 </head>
 <body>
 
-<!-- ═══════════ HERO ═══════════ -->
 <section class="hero">
     <div class="hero-badge">
         <span class="pulse"></span> Live — Paper Trading (BTC/USDC)
@@ -322,8 +310,8 @@
         <strong>learns from every trade</strong> — powered by multimodal AI, ChromaDB vector memory, and a multi-stage reasoning pipeline.
     </p>
     <div class="claim">
-        No other open-source bot combines chart vision, internal debate, vector memory,
-        self-written rules, and zero-cost sentiment. <em>This is it.</em>
+        An experimental, local-first research loop combining chart vision, semantic trade memory,
+        deterministic risk limits and public source code.
     </div>
     <div class="hero-cta">
         <a href="https://semanticsignal.qrak.org" class="btn btn-primary" target="_blank" rel="noopener">
@@ -359,7 +347,6 @@
     </div>
 </section>
 
-<!-- ═══════════ ARCHITECTURE ═══════════ -->
 <section>
     <div class="container">
         <h2><span>⚙</span> How It Works</h2>
@@ -378,7 +365,7 @@
                 <span class="cyan"># 3. RAG Engine &amp; Social Sentiment</span><br>
                 <span class="green">✔</span> Ingested RSS news feeds &amp; Reddit community sentiment (zero API cost)<br><br>
                 <span class="cyan"># 4. Multimodal AI Analysis</span><br>
-                <span class="green">✔</span> Visual Full HD candlestick chart analysis + Bull vs. Bear debate + EV framework evaluation<br><br>
+                <span class="green">✔</span> Visual Full HD candlestick chart analysis + Bull vs. Bear reasoning prompt + explicit invalidation step<br><br>
                 <span class="cyan"># 5. Risk Governance &amp; Execution</span><br>
                 <span class="green">✔</span> Signal: BUY | Position: 1-3% (confidence-scaled) | SL: 2x ATR (profile-scaled) | TP: min 1.5 R:R at structure<br><br>
                 <span class="cyan"># 6. Reflection &amp; Memory (ChromaDB)</span><br>
@@ -396,12 +383,12 @@
             <div class="card">
                 <div class="icon">🗣️</div>
                 <h3>Reason About It</h3>
-                <p>The multimodal AI receives the Full HD chart image plus the indicator stack plus fresh news and Reddit sentiment. It argues the bull case, then the bear case, then evaluates expected value against its own trade history — and must pass a falsification check before a signal is accepted.</p>
+                <p>The multimodal AI receives the Full HD chart image plus the indicator stack plus fresh news and Reddit sentiment. Its prompt asks it to state a bull case, a bear case and what would invalidate the proposed trade; deterministic risk checks remain outside the model.</p>
             </div>
             <div class="card">
                 <div class="icon">🛡️</div>
                 <h3>Decide Safely</h3>
-                <p>Every signal runs a guard chain: symbol whitelist, position cap, cooldown window, R:R gate. Stop-loss scales with ATR volatility, take-profit targets minimum 1.5 R:R. The decision, reasoning, and risk parameters are all logged to the audit trail.</p>
+                <p>Every signal runs a guard chain: symbol whitelist, position cap, R:R gate. Stop-loss scales with ATR volatility, take-profit targets minimum 1.5 R:R. The decision, reasoning, and risk parameters are all logged to the audit trail.</p>
             </div>
             <div class="card">
                 <div class="icon">🧬</div>
@@ -412,7 +399,6 @@
     </div>
 </section>
 
-<!-- ═══════════ FEATURES ═══════════ -->
 <section style="background:rgba(0,0,0,.15)">
     <div class="container">
         <h2><span>🧠</span> Core Features</h2>
@@ -429,7 +415,7 @@
                 <div class="icon">⚔️</div>
                 <h3>Bull vs Bear Internal Debate</h3>
                 <p>Before every decision, the LLM argues BOTH sides. Bull case optimistic, Bear case pessimistic. Then it decides. More balanced, less emotional.</p>
-                <p style="margin-top:8px">The debate is followed by an expected-value calculation using real trade history — probability of win × average win, minus probability of loss × average loss, minus fees. A falsification check then rejects any signal the LLM cannot defend. A missed +EV opportunity is treated as mathematically identical to a realized loss.</p>
+                <p>This is one model prompt with two requested perspectives, not an independent multi-agent debate. The system records the reasoning and applies deterministic execution checks, but it does not currently enforce a deterministic expected-value gate or evaluate missed opportunities as realized losses.</p>
             </div>
             <div class="card">
                 <div class="icon">🧠</div>
@@ -446,20 +432,20 @@
             <div class="card">
                 <div class="icon">📰</div>
                 <h3>Zero-Cost Market Intelligence</h3>
-                <p>Live news feeds (CoinDesk, CoinTelegraph, Decrypt) and Reddit community sentiment — all scraped directly. No API keys, no subscription fees.</p>
+                <p>RSS news feeds and Reddit community context are read directly without separate sentiment-data API keys. The selected LLM provider may still have its own usage costs.</p>
                 <p style="margin-top:8px">Every 4-hour cycle ingests up to 5 top articles, scored for relevance before they reach the model. Fundamentals come from CoinGecko and DeFiLlama, plus the Alternative.me Fear &amp; Greed index. X/Twitter was tried and dropped — without paid auth it isn't reliably scrapable, so the bot honestly runs on Reddit + RSS rather than pretending otherwise.</p>
             </div>
             <div class="card">
                 <div class="icon">🛡️</div>
                 <h3>Safety-First Execution</h3>
-                <p>Cooldown windows prevent overtrading. Position caps, symbol whitelist, and validated SL/TP levels enforced before every order. Paper trading by default.</p>
-                <p style="margin-top:8px">Every signal passes a pre-execution guard chain: symbol whitelist → maximum position size → cooldown window. If governance or risk validation can't decide safely, the system <strong>fails closed</strong> — no order, no exceptions. Soft exits trigger at candle close, hard exits check against live ticker prices at 15-minute intervals. Real exchange execution is being built as a dedicated executor service — a separate component that places and manages live orders under the same guard chain, with capital simulated until the pipeline proves itself.</p>
+                <p>Position caps, symbol whitelist, and validated SL/TP levels are enforced before every order. Paper trading by default.</p>
+                <p style="margin-top:8px">Every signal passes a pre-execution guard chain: symbol whitelist → maximum position size. If governance or risk validation can't decide safely, the system <strong>fails closed</strong> — no order, no exceptions. Soft exits trigger at candle close, hard exits check against live ticker prices at 15-minute intervals. Real exchange execution is being built as a dedicated executor service — a separate component that places and manages live orders under the same guard chain, with capital simulated until the pipeline proves itself.</p>
             </div>
             <div class="card">
                 <div class="icon">📊</div>
                 <h3>Full Transparency</h3>
-                <p>Live WebSocket dashboard with candlestick charts, decision graphs, and the exact prompt, reasoning, and response behind every trade.</p>
-                <p>The FastAPI dashboard streams brain activity, position state, performance statistics, news, market data, and the memory bank across ten tabs. Every decision's full prompt and LLM response is visible — plus an admin console for configuration, force-analysis, and log streaming. No black boxes.</p>
+                <p>Live WebSocket dashboard with candlestick charts, decision graphs, and the latest prompt, reasoning, and response.</p>
+                <p>The FastAPI dashboard streams brain activity, position state, performance statistics, news, market data, and the memory bank across ten tabs. It exposes the latest full prompt and LLM response plus an admin console for configuration, force-analysis, and log streaming.</p>
             </div>
             <div class="card">
                 <div class="icon">🔍</div>
@@ -471,79 +457,73 @@
     </div>
 </section>
 
-<!-- ═══════════ WHY IT'S DIFFERENT ═══════════ -->
 <section>
     <div class="container">
-        <h2><span>🏆</span> Why Nothing Else Comes Close</h2>
-        <p class="subhead">Freqtrade, 3Commas, Cryptohopper, Gunbot, Hummingbot — none of them do what this bot does. Here's the honest comparison.</p>
-        <p style="color:var(--muted);margin-bottom:24px;max-width:750px;line-height:1.7">The difference isn't one feature — it's the whole architecture. Most bots are a strategy engine: fixed rules, fixed size, no memory, no context. This bot is a reasoning system: it reads the chart as an image, recalls its own trade history, argues both market directions, and is forced to defend every signal before it's executed. Below is the same comparison every bot vendor hopes you never see.</p>
+        <h2><span>🏆</span> What This Project Combines</h2>
+        <p class="subhead">A local-first, open-source research loop — not a claim that every other bot lacks these capabilities.</p>
+        <p style="color:var(--muted);margin-bottom:24px;max-width:750px;line-height:1.7">Open-source projects solve different parts of the problem: Freqtrade focuses on execution and backtesting; TradingAgents explores multi-agent market research; Vibe-Trading combines vision and agent workflows. Semantic Signal combines chart vision, local trade memory and deterministic risk limits in one experimental research loop.</p>
 
         <div class="compare">
             <div class="compare-col">
-                <h3>Every Other Bot</h3>
+                <h3>Comparable open-source projects</h3>
                 <ul>
-                    <li><span class="x">✘</span> Reads numbers only — blind to the actual chart</li>
-                    <li><span class="x">✘</span> No memory — repeats the same mistakes every cycle</li>
-                    <li><span class="x">✘</span> No debate, no self-check, no falsification</li>
-                    <li><span class="x">✘</span> Fixed rules, fixed size — no ATR-aware risk</li>
-                    <li><span class="x">✘</span> Paid sentiment APIs or no market context at all</li>
-                    <li><span class="x">✘</span> Black box — you can't see why it traded</li>
-                    <li><span class="x">✘</span> Closed source, subscription fees ($30–$100+/mo)</li>
+                    <li><span class="x">•</span> <a href="https://github.com/freqtrade/freqtrade" target="_blank" rel="noopener">Freqtrade</a>: mature open-source execution and backtesting</li>
+                    <li><span class="x">•</span> <a href="https://github.com/TauricResearch/TradingAgents" target="_blank" rel="noopener">TradingAgents</a>: multi-agent market research and debate</li>
+                    <li><span class="x">•</span> <a href="https://github.com/HKUDS/Vibe-Trading" target="_blank" rel="noopener">Vibe-Trading</a>: vision, memory and agent workflows</li>
+                    <li><span class="x">•</span> Different scopes and architectures; no profitability ranking is implied</li>
                 </ul>
             </div>
             <div class="compare-col win">
                 <h3>Semantic Signal LLM</h3>
                 <ul>
-                    <li><span class="chk">✔</span> Multimodal AI <strong>sees</strong> the Full HD candlestick chart — vision + numbers</li>
-                    <li><span class="chk">✔</span> ChromaDB vector memory — recalls every closed trade semantically</li>
-                    <li><span class="chk">✔</span> Bull vs. Bear debate + EV framework + falsification check</li>
+                    <li><span class="chk">✔</span> Multimodal AI receives a 1920×1080 candlestick chart alongside market data</li>
+                    <li><span class="chk">✔</span> ChromaDB stores closed-trade experiences and retrieves relevant lessons by similarity</li>
+                    <li><span class="chk">✔</span> Bull/Bear reasoning prompt and an explicit invalidation step</li>
                     <li><span class="chk">✔</span> ATR-scaled SL/TP, position caps, adaptive risk profiles</li>
-                    <li><span class="chk">✔</span> Zero-cost Reddit + RSS sentiment — no API keys</li>
-                    <li><span class="chk">✔</span> Full transparency — every prompt &amp; decision visible live</li>
-                    <li><span class="chk">✔</span> Open source, free, self-improving (8 AI coding agents maintain the codebase)</li>
+                    <li><span class="chk">✔</span> Reddit and RSS context without separate sentiment-data API keys</li>
+                    <li><span class="chk">✔</span> Live dashboard exposes the latest prompt, response and decision</li>
+                    <li><span class="chk">✔</span> MIT-licensed source code, simulated capital by default and documented AI-assisted development roles</li>
                 </ul>
             </div>
         </div>
 
         <p class="compare-note">
-            <strong>1,380+ automated tests.</strong> Deterministic outputs. CI-ready. A trading engine
-            engineered to the same standard as production banking software — not a weekend script.
+            <strong>Experimental research software.</strong> It does not claim superior returns or replace
+            established execution platforms. Read the source and risk disclaimer before using any trading software.
         </p>
     </div>
 </section>
 
-<!-- ═══════════ LLM TRADING IS NEW ═══════════ -->
 <section>
     <div class="container">
-        <h2><span>🧭</span> LLM Trading Is Brand New</h2>
-        <p class="subhead">This is not a mature industry with proven products. It's a frontier — and that's exactly why this project exists.</p>
+        <h2><span>🧭</span> LLM Trading Needs Careful Validation</h2>
+        <p class="subhead">Research systems, backtests, testnets and live execution all answer different questions. This project is still testnet-only.</p>
 
         <div class="grid">
             <div class="card">
                 <div class="icon">⚙️</div>
-                <h3>XGBoost Is Proven. LLM Isn't (Yet).</h3>
-                <p>Classical ML — XGBoost, random forests, feature-engineered signals — has a real, decades-long track record in quant trading. <strong>LLM-based autonomous trading does not.</strong> That distinction matters, and we don't blur it.</p>
+                <h3>Model choice is not proof of returns</h3>
+                <p>Classical ML, rule-based systems and LLM-driven systems each need validation under their own assumptions. A model label alone does not establish profitability.</p>
             </div>
             <div class="card">
                 <div class="icon">📜</div>
-                <h3>No Playbook Exists</h3>
-                <p>LLM trading has no decade of backtests, no academic consensus, no established best practices. The research papers on LLM agents for trading are barely two years old. Every builder is figuring it out from scratch — <strong>including us.</strong></p>
+                <h3>No shortcut from research to real capital</h3>
+                <p>Backtests, paper trading, exchange testnets and live trading differ in fills, slippage, liquidity and operational risk. This project does not treat a research result as proof it will trade safely with real capital.</p>
             </div>
             <div class="card">
                 <div class="icon">🚫</div>
-                <h3>Anyone Claiming a Track Record Is Lying</h3>
-                <p>If a vendor tells you their LLM bot has a "proven" record — they don't. The field is too young for one to exist. The only honest response is what we do: <strong>run in the open, show every trade, and let the data speak.</strong></p>
+                <h3>No profitability claim</h3>
+                <p>This project has no audited live-profitability record and makes no return promise. Its public source, dashboard and decision records are evidence to inspect, not a substitute for independent validation.</p>
             </div>
             <div class="card">
                 <div class="icon">🎟️</div>
-                <h3>A Front-Row Seat to History</h3>
-                <p>You're not buying a finished product here. You're watching a new category get figured out in real time — mistakes, lessons, and all. <strong>That's a feature, not a bug.</strong></p>
+                <h3>Research in the open</h3>
+                <p>You are not buying a finished product. The repository and dashboard show an experimental project being developed in public, including its limits and corrections.</p>
             </div>
         </div>
     </div>
 </section>
 
-<!-- ═══════════ HONEST LIMITATIONS ═══════════ -->
 <section style="background:rgba(0,0,0,.15)">
     <div class="container">
         <h2><span>🪞</span> Not a Money Machine. Honest Limitations.</h2>
@@ -565,7 +545,7 @@
                 <h3>How Each Flaw Is Being Mitigated</h3>
                 <ul>
                     <li><span class="chk">✔</span> <strong>Quality over speed.</strong> Deeper analysis beats faster analysis. Longer timeframes = fewer, better decisions.</li>
-                    <li><span class="chk">✔</span> <strong>Paper → real, step by step.</strong> Position caps, ATR-scaled risk, and cooldowns are built for the transition to live capital — and a dedicated executor service for live exchange orders is under active development.</li>
+                    <li><span class="chk">✔</span> <strong>Paper → real, step by step.</strong> Position caps, ATR-scaled risk, and validated stop/target levels are built for the transition to live capital — and a dedicated executor service for live exchange orders is under active development.</li>
                     <li><span class="chk">✔</span> <strong>More sources in progress.</strong> Additional sentiment channels are on the roadmap — without paying for API keys.</li>
                     <li><span class="chk">✔</span> <strong>Self-correction loop.</strong> Every wrong call is embedded into memory and reviewed — the same mistake gets harder to repeat.</li>
                     <li><span class="chk">✔</span> <strong>Risk-first design.</strong> EV framework, falsification checks, and 1,380+ tests exist precisely because losses are expected.</li>
@@ -582,7 +562,6 @@
     </div>
 </section>
 
-<!-- ═══════════ TECH STACK ═══════════ -->
 <section>
     <div class="container">
         <h2><span>🛠</span> Tech Stack</h2>
@@ -599,7 +578,6 @@
     </div>
 </section>
 
-<!-- ═══════════ CTA ═══════════ -->
 <div class="cta">
     <h2>Ready to Watch the Brain Trade?</h2>
     <p style="color:var(--muted);max-width:500px;margin:0 auto">
@@ -616,7 +594,6 @@
     </div>
 </div>
 
-<!-- ═══════════ ABOUT ═══════════ -->
 <section>
     <div class="container">
         <h2><span>👨‍💻</span> About the Developer</h2>
@@ -681,7 +658,6 @@
     </div>
 </section>
 
-<!-- ═══════════ FOOTER ═══════════ -->
 <footer>
     <p>
         Built with ❤️ in Wrocław, Poland by <a href="https://github.com/qrak" target="_blank" rel="noopener">@qrak</a>

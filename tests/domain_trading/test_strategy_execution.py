@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import tempfile
 from contextlib import ExitStack
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -24,6 +25,11 @@ from src.managers.persistence_manager import PersistenceManager
 from src.trading import executor_handler
 from src.trading.data_models import MarketConditions, Position, TradeDecision
 from src.trading.executor_handler import ACTIONABLE_SIGNALS, ExecutorHandler
+from src.trading.executor_reconciliation import (
+    INTENT_ACTION_CLOSE,
+    INTENT_PENDING,
+    INTENT_UNKNOWN,
+)
 from src.trading.trading_strategy import TradingStrategy
 from src.trading.vector_memory import VectorMemoryService
 from tests.conftest import (
@@ -93,7 +99,12 @@ def _http_client(status_code: int | None = 200, exc: Exception | None = None) ->
 def _strategy(
     position: Position | None = None, **config_overrides: Any
 ) -> tuple[TradingStrategy, MagicMock, MagicMock]:
-    """Real TradingStrategy on the shared doubles; returns strategy, logger and persistence."""
+    """Real TradingStrategy on the shared doubles; returns strategy, logger and persistence.
+
+    The intent journal is isolated per call: booking idempotency is restart-safe ACROSS
+    runs (that is the point of the journal), so a shared repo path would make a second
+    pytest run skip an exit the first one already booked.
+    """
     logger = null_logger()
     persistence = mock_persistence()
     statistics = mock_statistics()
@@ -107,7 +118,14 @@ def _strategy(
         statistics_service=statistics,
         memory_service=MagicMock(),
         risk_manager=MagicMock(),
-        config=make_config(**config_overrides),
+        config=make_config(
+            **{
+                "BOT_INTENT_JOURNAL_PATH": str(
+                    Path(tempfile.mkdtemp()) / "bot_position_intents.jsonl"
+                ),
+                **config_overrides,
+            }
+        ),
         position_extractor=MagicMock(),
     )
     if position is not None:
@@ -778,20 +796,6 @@ class TestPositionPersistence:
         assert rows[row_id]["action"] == "CLOSE_SHORT"
         assert rows[row_id]["fee"] == 0.3702
         assert rows[second_id]["action"] == "BUY"
-        assert manager.get_last_execution_timestamp() == closed.timestamp
-
-    def test_last_execution_timestamp_propagates_the_sqlite_failure(self, tmp_path: Path) -> None:
-        """A dead history database must surface as an error, not as 'no trades yet'."""
-        logger = null_logger()
-        manager = PersistenceManager(logger, data_dir=str(tmp_path))
-        failure = RuntimeError("db down")
-        manager.sqlite_history.get_last_execution_timestamp = MagicMock(side_effect=failure)
-
-        with pytest.raises(RuntimeError, match="db down"):
-            manager.get_last_execution_timestamp()
-        logger.error.assert_called_once_with(
-            "Failed to read last execution timestamp from SQLite: %s", failure
-        )
 
     @pytest.mark.parametrize(
         ("rows", "expected_reasoning"),
@@ -904,17 +908,18 @@ class TestExecutorHandshake:
             assert client.get.await_args.kwargs == {"params": {"symbol": "BTC/USDC"}}
 
     @pytest.mark.parametrize(
-        ("signal", "position_overrides", "stop_loss", "take_profit", "probe", "update_age_hours", "expected_action", "expected_sl", "expected_tp", "expected_save"),
+        ("signal", "position_overrides", "stop_loss", "take_profit", "probe", "update_age_hours", "expected_action", "expected_sl", "expected_tp", "expected_save", "executor_enabled"),
         [
-            pytest.param("CLOSE", {}, None, None, "real", None, "CLOSE", None, None, "none", id="close_signal_exits"),
-            pytest.param("CLOSE_LONG", {}, None, None, "real", None, "CLOSE", None, None, "none", id="close_long_signal_exits"),
-            pytest.param("UPDATE", {"stop_loss": 40000.0, "take_profit": 60000.0}, 39000.0, 60000.0, "real", 0.0, None, 40000.0, 60000.0, "absent", id="update_rejected_too_soon"),
-            pytest.param("UPDATE", {"stop_loss": 40000.0, "take_profit": 60000.0}, 39000.0, 60000.0, "real", 100000.0, "UPDATE", 39000.0, 60000.0, "position", id="update_sl_applied"),
-            pytest.param("UPDATE", {"stop_loss": 40000.0, "take_profit": 60000.0}, 40000.0, 61000.0, "real", 100000.0, "UPDATE", 40000.0, 61000.0, "position", id="update_tp_applied"),
-            pytest.param("CLOSE", {"stop_loss": 40000.0, "take_profit": 60000.0}, None, None, False, None, None, None, None, "none", id="close_skipped_when_executor_flat"),
-            pytest.param("UPDATE", {"stop_loss": 40000.0, "take_profit": 60000.0}, 39000.0, 60000.0, False, 100000.0, None, None, None, "none", id="update_skipped_when_executor_flat"),
-            pytest.param("CLOSE", {"stop_loss": 40000.0, "take_profit": 60000.0}, None, None, None, None, None, 40000.0, 60000.0, "absent", id="close_skipped_when_unverifiable"),
-            pytest.param("UPDATE", {"stop_loss": 40000.0, "take_profit": 60000.0}, 39000.0, 60000.0, None, 100000.0, None, 40000.0, 60000.0, "absent", id="update_skipped_when_unverifiable"),
+            pytest.param("CLOSE", {"stop_loss": 40000.0, "take_profit": 60000.0}, None, None, "real", None, None, 40000.0, 60000.0, "unknown_close", False, id="close_signal_without_executor_books_nothing"),
+            pytest.param("CLOSE_LONG", {"stop_loss": 40000.0, "take_profit": 60000.0}, None, None, "real", None, None, 40000.0, 60000.0, "unknown_close", False, id="close_long_signal_without_executor_books_nothing"),
+            pytest.param("CLOSE", {"stop_loss": 40000.0, "take_profit": 60000.0}, None, None, True, None, "CLOSE", 40000.0, 60000.0, "pending_close", True, id="close_signal_with_executor_requests_only"),
+            pytest.param("UPDATE", {"stop_loss": 40000.0, "take_profit": 60000.0}, 39000.0, 60000.0, "real", 0.0, None, 40000.0, 60000.0, "absent", False, id="update_rejected_too_soon"),
+            pytest.param("UPDATE", {"stop_loss": 40000.0, "take_profit": 60000.0}, 39000.0, 60000.0, "real", 100000.0, "UPDATE", 39000.0, 60000.0, "position", False, id="update_sl_applied"),
+            pytest.param("UPDATE", {"stop_loss": 40000.0, "take_profit": 60000.0}, 40000.0, 61000.0, "real", 100000.0, "UPDATE", 40000.0, 61000.0, "position", False, id="update_tp_applied"),
+            pytest.param("CLOSE", {"stop_loss": 40000.0, "take_profit": 60000.0}, None, None, False, None, None, 40000.0, 60000.0, "kept", True, id="close_keeps_position_when_executor_flat"),
+            pytest.param("UPDATE", {"stop_loss": 40000.0, "take_profit": 60000.0}, 39000.0, 60000.0, False, 100000.0, None, 40000.0, 60000.0, "kept", True, id="update_keeps_position_when_executor_flat"),
+            pytest.param("CLOSE", {"stop_loss": 40000.0, "take_profit": 60000.0}, None, None, None, None, None, 40000.0, 60000.0, "absent", True, id="close_skipped_when_unverifiable"),
+            pytest.param("UPDATE", {"stop_loss": 40000.0, "take_profit": 60000.0}, 39000.0, 60000.0, None, 100000.0, None, 40000.0, 60000.0, "absent", True, id="update_skipped_when_unverifiable"),
         ],
     )
     async def test_existing_position_signal_matrix(
@@ -929,10 +934,16 @@ class TestExecutorHandshake:
         expected_sl: float | None,
         expected_tp: float | None,
         expected_save: str,
+        executor_enabled: bool,
+        tmp_path: Path,
     ) -> None:
-        """CLOSE exits, UPDATE needs a verified executor position and a matured interval."""
+        """CLOSE needs executor evidence; UPDATE needs a verified position and a mature interval."""
         position = make_position(**position_overrides)
-        strategy, _, persistence = _strategy(position)
+        strategy, _, persistence = _strategy(
+            position,
+            EXECUTOR_EXIT_PATH=str(tmp_path / "executor_exits.jsonl"),
+            EXECUTOR_API_ENABLED=executor_enabled,
+        )
         if probe != "real":
             strategy._executor_has_position = AsyncMock(return_value=probe)
         if update_age_hours is not None:
@@ -963,9 +974,32 @@ class TestExecutorHandshake:
             assert strategy.current_position.take_profit == expected_tp
         if expected_save == "none":
             assert persistence.async_save_position.await_args_list[-1].args == (None,)
+        elif expected_save == "kept":
+            assert persistence.async_save_position.await_count == 0
+            assert persistence.async_save_trade_decision.await_count == 0
+            assert strategy.take_state_divergence() is not None
         elif expected_save == "position":
             assert persistence.async_save_position.await_count == 1
             assert persistence.async_save_position.await_args.args[0].stop_loss == stop_loss
+        elif expected_save == "unknown_close":
+            assert persistence.async_save_position.await_count == 0
+            assert persistence.async_save_trade_decision.await_count == 0
+            assert strategy.statistics_service.recalculate.call_count == 0
+            assert strategy.take_state_divergence() is not None
+            request = strategy.take_local_exit_request()
+            assert request is not None
+            assert (request.reason, request.state) == ("analysis_signal", INTENT_UNKNOWN)
+            assert request.order_id is None
+            assert strategy.position_intents().get(request.intent_key).state == INTENT_UNKNOWN
+            assert strategy.take_unconfirmed_intent_alert() is not None
+        elif expected_save == "pending_close":
+            assert persistence.async_save_position.await_count == 0
+            assert persistence.async_save_trade_decision.await_count == 0
+            assert strategy.statistics_service.recalculate.call_count == 0
+            intent = strategy.position_intents().get_by_order(result.order_id)
+            assert intent is not None and intent.action == INTENT_ACTION_CLOSE
+            assert intent.state == INTENT_PENDING
+            assert strategy.take_local_exit_request() is None
         else:
             assert persistence.async_save_position.await_count == 0
 
@@ -1084,6 +1118,31 @@ class TestEntryConfirmation:
             assert logger.warning.call_args_list == []
         else:
             assert logger.warning.call_args.args[0] == "Executor verdict for %s: %s — entry was %s"
+
+    async def test_confirm_entry_keeps_a_filled_entry_with_protection_error(
+        self, tmp_path: Path
+    ) -> None:
+        journal = _journal(
+            tmp_path,
+            [json.dumps({
+                "order_id": "order-abc",
+                "verdict": "error",
+                "state": "filled",
+                "filled_quantity": 0.00698,
+                "exposure_possible": True,
+                "reason": "entry filled but protection unresolved",
+            })],
+        )
+        strategy, logger, _ = _strategy(make_position())
+        strategy.config = _verdict_config(journal)
+
+        with _confirm_window(2):
+            result = await strategy.confirm_entry_with_executor(
+                "BTC/USDC", order_id="order-abc"
+            )
+
+        assert result is True
+        assert logger.critical.call_args.args[0].startswith("Executor reported %s")
 
     async def test_confirm_entry_fails_open_without_a_verdict(self, tmp_path: Path) -> None:
         """An unreadable or absent journal must never order a rollback."""
@@ -1206,6 +1265,172 @@ class TestEntryRollback:
             assert any("rolled back local phantom" in call.args[0] for call in logger.warning.call_args_list)
 
 
+class TestExecutorSideExitBooking:
+    """An exchange-side exit (SL/TP filled between cycles) is booked, not dropped.
+
+    Regression for 2026-09-20: the stop-loss filled on the exchange while the
+    bot was between cycles, the executor cleared its position, and the bot's
+    next cycle simply erased its local position — the entry stayed open in trade
+    history forever (an entry with no exit reads as a duplicate buy), the loss
+    never reached statistics and the brain never learned from it.
+    """
+
+    ENTRY_TIME = datetime(2026, 9, 20, 12, 4, 12, tzinfo=timezone.utc)
+
+    def _position(self, **overrides: Any) -> Position:
+        values: dict[str, Any] = {
+            "symbol": "BTC/USDC",
+            "entry_price": 80445.95,
+            "stop_loss": 78800.0,
+            "take_profit": 83750.0,
+            "size": 0.005220896763603389,
+            "entry_time": self.ENTRY_TIME,
+        }
+        values.update(overrides)
+        return make_position(**values)
+
+    def _entry(self, **overrides: Any) -> dict[str, Any]:
+        """One executor exit-journal entry (the real SL fill of that trade)."""
+        entry: dict[str, Any] = {
+            "timestamp": "2026-09-20T15:29:25.947000+00:00",
+            "symbol": "BTC/USDC",
+            "side": "long",
+            "quantity": 0.00522,
+            "entry_price": 80457.58,
+            "exit_price": 78800.0,
+            "exit_reason": "stop_loss_filled",
+            "protection_order_id": "2012137",
+            "source": "reconcile",
+        }
+        entry.update(overrides)
+        return entry
+
+    def _journal(self, tmp_path: Path, entries: list[dict[str, Any]]) -> Path:
+        path = tmp_path / "executor_exits.jsonl"
+        path.write_text(
+            "".join(f"{json.dumps(entry)}\n" for entry in entries), encoding="utf-8"
+        )
+        return path
+
+    async def test_books_the_real_fill_price_from_the_executor_journal(self, tmp_path: Path) -> None:
+        """A recorded SL fill books the CLOSE at the exchange price, with its reason."""
+        position = self._position()
+        strategy, _, persistence = _strategy(
+            position, EXECUTOR_EXIT_PATH=str(self._journal(tmp_path, [self._entry()]))
+        )
+
+        await strategy.book_executor_side_exit(
+            position, 80500.0, MarketConditions(), "Executor confirmed flat"
+        )
+
+        assert strategy.current_position is None
+        decision = persistence.async_save_trade_decision.await_args.args[0]
+        assert decision.action == "CLOSE_LONG"
+        assert decision.price == 78800.0
+        assert decision.quantity == pytest.approx(0.00522)
+        assert decision.quantity != pytest.approx(position.size)
+        assert decision.symbol == "BTC/USDC"
+        assert "stop_loss_filled" in decision.reasoning
+        assert "2012137" in decision.reasoning
+        assert decision.reasoning.lower().count("executor confirmed flat") == 1
+
+    @pytest.mark.parametrize("exit_reason", ["stop_loss_filled", "take_profit_filled"])
+    async def test_flags_the_booked_exit_once_for_the_closing_report(self, tmp_path: Path, exit_reason: str) -> None:
+        """A booked exchange-side exit flags its reason once, for the closing summary."""
+        position = self._position()
+        strategy, _, _ = _strategy(
+            position, EXECUTOR_EXIT_PATH=str(self._journal(tmp_path, [self._entry(exit_reason=exit_reason)]))
+        )
+
+        assert strategy.take_executor_side_exit_reason() is None
+
+        await strategy.book_executor_side_exit(
+            position, 80500.0, MarketConditions(), "Executor confirmed flat"
+        )
+
+        reason = strategy.take_executor_side_exit_reason()
+        assert reason is not None
+        assert exit_reason in reason
+        assert reason.lower().count("executor confirmed flat") == 1
+        assert strategy.take_executor_side_exit_reason() is None
+
+    async def test_no_record_keeps_the_position_and_flags_the_divergence(self, tmp_path: Path) -> None:
+        """No executor record → the "flat" is unproven: keep the position, alert the operator.
+
+        Booking a close on a false flat is what desynced the books from the exchange
+        on 2026-09-21 (a bad read wiped the executor's tracker while both protection
+        orders stayed open on the exchange).
+        """
+        position = self._position()
+        strategy, _, persistence = _strategy(
+            position, EXECUTOR_EXIT_PATH=str(tmp_path / "missing.jsonl")
+        )
+
+        await strategy.book_executor_side_exit(
+            position, 80500.0, MarketConditions(), "Executor confirmed flat"
+        )
+
+        persistence.async_save_trade_decision.assert_not_awaited()
+        assert strategy.take_executor_side_exit_reason() is None
+        divergence = strategy.take_state_divergence()
+        assert divergence is not None and "no exit record" in divergence
+        assert strategy.take_state_divergence() is None
+
+    async def test_stale_record_does_not_close_the_position(self, tmp_path: Path) -> None:
+        """A record older than the position is not this position's exit → keep + flag."""
+        position = self._position()
+        stale = self._entry(timestamp="2026-09-19T15:29:25.947000+00:00", exit_price=60000.0)
+        strategy, _, persistence = _strategy(
+            position, EXECUTOR_EXIT_PATH=str(self._journal(tmp_path, [stale]))
+        )
+
+        await strategy.book_executor_side_exit(
+            position, 80500.0, MarketConditions(), "Executor confirmed flat"
+        )
+
+        persistence.async_save_trade_decision.assert_not_awaited()
+        assert strategy.take_state_divergence() is not None
+
+    async def test_unreadable_journal_keeps_the_position_without_raising(self, tmp_path: Path) -> None:
+        """Corrupt journal lines never crash the booking path — and never invent a close."""
+        path = tmp_path / "executor_exits.jsonl"
+        path.write_text("{not json\n", encoding="utf-8")
+        position = self._position()
+        strategy, _, persistence = _strategy(position, EXECUTOR_EXIT_PATH=str(path))
+
+        await strategy.book_executor_side_exit(
+            position, 80500.0, MarketConditions(), "Executor confirmed flat"
+        )
+
+        persistence.async_save_trade_decision.assert_not_awaited()
+        assert strategy.take_state_divergence() is not None
+
+    async def test_update_path_books_the_exit_when_executor_reports_flat(self, tmp_path: Path) -> None:
+        """The UPDATE/HOLD path (executor says flat) books the CLOSE and forwards nothing."""
+        position = self._position()
+        strategy, _, persistence = _strategy(
+            position, EXECUTOR_EXIT_PATH=str(self._journal(tmp_path, [self._entry()]))
+        )
+        strategy._executor_has_position = AsyncMock(return_value=False)
+
+        result = await strategy._handle_existing_position(
+            signal="UPDATE",
+            confidence="MEDIUM",
+            stop_loss=79550.0,
+            take_profit=84500.0,
+            current_price=81198.56,
+            symbol="BTC/USDC",
+            reasoning="Hold and manage the open position",
+            market_conditions=MarketConditions(),
+        )
+
+        assert result is None
+        assert strategy.current_position is None
+        decision = persistence.async_save_trade_decision.await_args.args[0]
+        assert decision.action == "CLOSE_LONG"
+        assert decision.price == 78800.0
+
+
 class TestBlockedTradeStore:
     """VectorMemoryService rejections that feed the brain's feedback loop."""
 
@@ -1324,3 +1549,85 @@ class TestBlockedTradeStore:
         assert blocked_memory.get_blocked_trade_count() == 0
         assert blocked_memory.get_recent_blocked_trades(n=5) == []
         assert blocked_memory.get_blocked_trade_feedback() == ""
+
+
+class TestExecutorProtectionVersionProbe:
+    """Wave-5 req. 3: read the executor's protection revision for the guard.
+
+    Contract confirmed against the executor in staging (``src/api.py``,
+    ``src/position_tracker.py``): ``/position`` returns ``protection_version``, a
+    MONOTONIC durable counter bumped on every protection change, with ``0`` meaning
+    "none observed". ``0`` is a REAL value — it must travel as ``"0"`` so the before /
+    after comparison can still spot a change (0 -> 1). An older executor without the
+    field yields None and the guard in ``app`` stays inert.
+    """
+
+    async def _version(self, body: Any) -> str | None:
+        strategy, _, _ = _strategy(
+            EXECUTOR_API_ENABLED=True,
+            EXECUTOR_API_URL="http://127.0.0.1:9199/decision",
+        )
+        _probe_stub(strategy, body=body)
+        return await strategy.executor_protection_version("BTC/USDT")
+
+    @pytest.mark.parametrize(
+        ("body", "expected"),
+        [
+            pytest.param({"open": True, "protection_version": 0}, "0", id="zero-is-a-value"),
+            pytest.param({"open": True, "protection_version": 5}, "5", id="counter"),
+            pytest.param(
+                {"open": True, "protection_version": "7"}, "7", id="stringified-counter"
+            ),
+            pytest.param(
+                {"open": True, "protection_revision": "rev-2"},
+                "rev-2",
+                id="legacy-alias-still-accepted",
+            ),
+            pytest.param({"open": True}, None, id="older-executor-without-the-field"),
+            pytest.param({"open": True, "protection_version": None}, None, id="explicit-null"),
+            pytest.param({"open": True, "protection_version": ""}, None, id="empty-string"),
+        ],
+    )
+    async def test_the_revision_is_returned_verbatim_or_not_at_all(
+        self, tmp_path: Path, body: Any, expected: str | None
+    ) -> None:
+        assert await self._version(body) == expected
+
+    async def test_a_failed_query_is_not_a_revision(self, tmp_path: Path) -> None:
+        strategy, _, _ = _strategy(
+            EXECUTOR_API_ENABLED=True,
+            EXECUTOR_API_URL="http://127.0.0.1:9199/decision",
+        )
+        _probe_stub(strategy, exc=RuntimeError("executor down"))
+
+        assert await strategy.executor_protection_version("BTC/USDT") is None
+
+    async def test_an_http_error_is_not_a_revision(self, tmp_path: Path) -> None:
+        strategy, _, _ = _strategy(
+            EXECUTOR_API_ENABLED=True,
+            EXECUTOR_API_URL="http://127.0.0.1:9199/decision",
+        )
+        _probe_stub(strategy, status_code=503, body={"protection_version": 3})
+
+        assert await strategy.executor_protection_version("BTC/USDT") is None
+
+    async def test_the_query_asks_for_the_tracked_symbol(self, tmp_path: Path) -> None:
+        """The per-symbol answer is the one carrying the revision (not "all positions")."""
+        position = make_position()
+        strategy, _, _ = _strategy(
+            position,
+            EXECUTOR_API_ENABLED=True,
+            EXECUTOR_API_URL="http://127.0.0.1:9199/decision",
+        )
+        client = _probe_stub(strategy, body={"open": True, "protection_version": 4})
+
+        assert await strategy.executor_protection_version() == "4"
+        call = client.get.await_args
+        url, kwargs = call.args[0], call.kwargs
+        assert url.endswith("/position"), url
+        assert kwargs["params"] == {"symbol": position.symbol}
+
+    async def test_a_disabled_integration_yields_no_revision(self, tmp_path: Path) -> None:
+        strategy, _, _ = _strategy(EXECUTOR_API_ENABLED=False, EXECUTOR_API_URL="")
+
+        assert await strategy.executor_protection_version("BTC/USDT") is None

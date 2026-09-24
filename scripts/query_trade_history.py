@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Query the LLM_trader trade history SQLite database from the terminal.
 
 Usage:
@@ -85,7 +84,7 @@ def cmd_recent(args: argparse.Namespace) -> None:
     order = "ASC" if (getattr(args, "order", None) or "").upper() == "ASC" else "DESC"
 
     sql = f"SELECT * FROM trade_history ORDER BY timestamp {order} LIMIT ?"
-    rows = conn.execute(sql, [limit]).fetchall()  # nosec B608
+    rows = conn.execute(sql, [limit]).fetchall()
     conn.close()
 
     if not rows:
@@ -129,9 +128,9 @@ def cmd_search(args: argparse.Namespace) -> None:
     sql = f"SELECT * FROM trade_history {where} ORDER BY timestamp {order} LIMIT ? OFFSET ?"
     params.extend([limit, offset])
 
-    rows = conn.execute(sql, params).fetchall()  # nosec B608
+    rows = conn.execute(sql, params).fetchall()
     count_sql = f"SELECT COUNT(*) FROM trade_history {where}"
-    total = conn.execute(count_sql, params[:-2] if conditions else []).fetchone()[0]  # nosec B608
+    total = conn.execute(count_sql, params[:-2] if conditions else []).fetchone()[0]
     conn.close()
 
     if not rows:

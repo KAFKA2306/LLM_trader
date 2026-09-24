@@ -362,8 +362,3 @@ class AdminRouter:
                 if self.logger:
                     self.logger.warning("Admin console WebSocket error: %s", exc)
 
-    @property
-    def dashboard_feed_enabled(self) -> bool:
-        """Check if dashboard feed is enabled (read by app loop)."""
-        return self._dashboard_feed_enabled
-

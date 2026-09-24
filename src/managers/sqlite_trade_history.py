@@ -42,7 +42,7 @@ _INSERT_COLS = [
     "stop_loss", "take_profit", "position_size", "quote_amount",
     "quantity", "fee", "reasoning", "indicators_json",
 ]
-_INSERT_SQL = f"INSERT INTO trade_history ({', '.join(_INSERT_COLS)}) VALUES ({', '.join(['?'] * len(_INSERT_COLS))})"  # nosec B608
+_INSERT_SQL = f"INSERT INTO trade_history ({', '.join(_INSERT_COLS)}) VALUES ({', '.join(['?'] * len(_INSERT_COLS))})"
 
 
 class SQLiteTradeHistory:
@@ -98,7 +98,7 @@ class SQLiteTradeHistory:
                     self._coerce_col(col, decision_dict.get(col))
                     for col in _INSERT_COLS
                 )
-                cursor = conn.execute(_INSERT_SQL, row)  # nosec B608
+                cursor = conn.execute(_INSERT_SQL, row)
                 conn.commit()
                 return cursor.lastrowid or 0
             except Exception as e:  # noqa: BLE001
@@ -147,40 +147,17 @@ class SQLiteTradeHistory:
 
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         order_clause = f"ORDER BY timestamp {safe_order}"
-        sql = f"SELECT * FROM trade_history {where_clause} {order_clause} LIMIT ? OFFSET ?"  # nosec B608
+        sql = f"SELECT * FROM trade_history {where_clause} {order_clause} LIMIT ? OFFSET ?"
         params.extend([safe_limit, safe_offset])
 
         with self._lock:
             conn = self._get_conn()
             try:
-                rows = conn.execute(sql, params).fetchall()  # nosec B608
+                rows = conn.execute(sql, params).fetchall()
                 return [dict(r) for r in rows]
             except Exception as e:  # noqa: BLE001
                 self._logger.error("Query failed: %s", e)
                 return []
-            finally:
-                conn.close()
-
-    def get_last_execution_timestamp(self, actions: tuple[str, ...] = ("BUY", "SELL")) -> str | None:
-        """Return the newest timestamp for the provided action set.
-        Returns:
-            ISO timestamp string if found, else None.
-        """
-        if not actions:
-            return None
-
-        placeholders = ", ".join(["?"] * len(actions))
-        sql = (
-            f"SELECT timestamp FROM trade_history "  # nosec B608
-            f"WHERE action IN ({placeholders}) "
-            "ORDER BY timestamp DESC LIMIT 1"  # nosec B608
-        )
-
-        with self._lock:
-            conn = self._get_conn()
-            try:
-                row = conn.execute(sql, list(actions)).fetchone()  # nosec B608
-                return row[0] if row else None
             finally:
                 conn.close()
 
@@ -201,12 +178,12 @@ class SQLiteTradeHistory:
             params.append(action)
 
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-        sql = f"SELECT COUNT(*) FROM trade_history {where_clause}"  # nosec B608
+        sql = f"SELECT COUNT(*) FROM trade_history {where_clause}"
 
         with self._lock:
             conn = self._get_conn()
             try:
-                return conn.execute(sql, params).fetchone()[0]  # nosec B608
+                return conn.execute(sql, params).fetchone()[0]
             finally:
                 conn.close()
 

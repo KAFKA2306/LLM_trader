@@ -3,7 +3,6 @@ export async function updateVisuals() {
     const noChartMsg = document.getElementById('no-chart-msg');
     
     try {
-        // Try to fetch latest chart with cache buster
         const timestamp = Date.now();
         const response = await fetch(`/api/visuals/charts/latest?t=${timestamp}`);
         
@@ -16,10 +15,8 @@ export async function updateVisuals() {
                 img.alt = 'Analysis chart';
                 noChartMsg.style.display = 'none';
                 
-                // Add timestamp overlay
                 updateChartTimestamp(data.timestamp);
                 
-                // Add click to enlarge
                 img.onclick = () => openLightbox(img.src);
                 img.style.cursor = 'pointer';
                 img.title = 'Click to enlarge';
@@ -90,7 +87,6 @@ function updateChartTimestamp(timestamp) {
 }
 
 function openLightbox(src) {
-    // 1. Capture previously focused element to restore later
     const lastFocusedElement = document.activeElement;
 
     let zoom = 1;
@@ -100,16 +96,13 @@ function openLightbox(src) {
     const overlay = document.createElement('div');
     overlay.id = 'lightbox-overlay';
 
-    // 2. Add Accessibility Attributes
     overlay.setAttribute('role', 'dialog');
     overlay.setAttribute('aria-modal', 'true');
     overlay.setAttribute('aria-label', 'Image View');
 
-    // 3. Hide main content from screen readers
     const appContainer = document.getElementById('app-container');
     if (appContainer) appContainer.setAttribute('aria-hidden', 'true');
 
-    // Toolbar (without measurement tool)
     const toolbar = document.createElement('div');
     toolbar.className = 'lightbox-toolbar';
     toolbar.innerHTML = `
@@ -119,14 +112,12 @@ function openLightbox(src) {
         <span class="zoom-display" id="lb-zoom-display">100%</span>
     `;
 
-    // Close button
     const closeBtn = document.createElement('button');
     closeBtn.className = 'lightbox-close';
     closeBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
     closeBtn.title = 'Close (Esc)';
     closeBtn.setAttribute('aria-label', 'Close Image View');
 
-    // Viewport
     const viewport = document.createElement('div');
     viewport.className = 'lightbox-viewport';
 
@@ -141,7 +132,6 @@ function openLightbox(src) {
     overlay.appendChild(viewport);
     document.body.appendChild(overlay);
 
-    // 4. Focus Management - Set initial focus
     closeBtn.focus();
 
     function updateTransform() {
@@ -166,20 +156,17 @@ function openLightbox(src) {
         updateTransform();
     }
 
-    // Event listeners
     document.getElementById('lb-zoom-in').onclick = zoomIn;
     document.getElementById('lb-zoom-out').onclick = zoomOut;
     document.getElementById('lb-reset').onclick = resetView;
     closeBtn.onclick = () => overlay.remove();
 
-    // Mouse wheel zoom
     viewport.addEventListener('wheel', (e) => {
         e.preventDefault();
         if (e.deltaY < 0) zoomIn();
         else zoomOut();
     }, { passive: false });
 
-    // Pan on drag (always enabled)
     viewport.addEventListener('mousedown', (e) => {
         if (e.target === img || e.target === viewport) {
             viewport.classList.add('panning');
@@ -203,14 +190,12 @@ function openLightbox(src) {
         viewport.classList.remove('panning');
     });
 
-    // Keyboard shortcuts & Focus Trap
     function handleKeydown(e) {
         if (e.key === 'Escape') {
             overlay.remove();
             return;
         }
 
-        // Focus Trap Logic
         if (e.key === 'Tab') {
             const focusableElements = overlay.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
             if (focusableElements.length === 0) return;
@@ -218,12 +203,12 @@ function openLightbox(src) {
             const firstElement = focusableElements[0];
             const lastElement = focusableElements[focusableElements.length - 1];
 
-            if (e.shiftKey) { // Shift + Tab
+            if (e.shiftKey) { 
                 if (document.activeElement === firstElement) {
                     e.preventDefault();
                     lastElement.focus();
                 }
-            } else { // Tab
+            } else { 
                 if (document.activeElement === lastElement) {
                     e.preventDefault();
                     firstElement.focus();
@@ -238,14 +223,12 @@ function openLightbox(src) {
     }
     document.addEventListener('keydown', handleKeydown);
 
-    // Cleanup function
     function cleanup() {
         document.removeEventListener('keydown', handleKeydown);
         if (appContainer) appContainer.removeAttribute('aria-hidden');
         if (lastFocusedElement) lastFocusedElement.focus();
     }
 
-    // Remove overlay cleanup via MutationObserver
     const observer = new MutationObserver((mutations) => {
         mutations.forEach((mutation) => {
             mutation.removedNodes.forEach((node) => {

@@ -12,7 +12,23 @@ from typing import Any
 
 from src.utils.indicator_classifier import build_exit_execution_context_from_config
 
-from .data_models import MarketConditions, Position, TradeDecision, entry_direction
+from .data_models import (
+    LocalExitRequest,
+    MarketConditions,
+    Position,
+    TradeDecision,
+    entry_direction,
+)
+from .executor_reconciliation import (
+    INTENT_ACTION_CLOSE,
+    INTENT_ACTION_ENTRY,
+    INTENT_ACTION_UPDATE,
+    INTENT_LOCAL_ONLY,
+    INTENT_PENDING,
+    INTENT_REFUSED,
+    INTENT_UNKNOWN,
+    position_identity,
+)
 from .order_lifecycle import OrderIntent, OrderLifecycle
 from .rr_policy import format_rr_floor, resolve_entry_rr_floor
 
@@ -30,7 +46,13 @@ class PositionManagementMixin:
     current_position: Position | None
     _executor_has_position: Any
     _record_trade_decision: Any
+    position_intents: Any
+    intent_identity: Any
     close_position: Any
+    book_executor_side_exit: Any
+    _state_divergence: str | None
+    _executor_side_exit_reason: str | None
+    _rejected_intent_alert: str | None
     _tf_minutes: int
     _tightening_policy: Any
     _last_position_update_time: Any
@@ -47,6 +69,7 @@ class PositionManagementMixin:
         symbol: str,
         reasoning: str,
         market_conditions: MarketConditions,
+        market_price: float | None = None,
     ) -> TradeDecision | None:
         """Handle trading decision when position exists.
         Returns:
@@ -58,30 +81,91 @@ class PositionManagementMixin:
             if executor_pos_state is False:
                 self.logger.warning(
                     "CLOSE signal for %s but executor confirmed no open position — "
-                    "position was closed on exchange or rejected on entry. Resetting local position state.",
+                    "position was closed on exchange or rejected on entry. Booking the "
+                    "exchange-side exit so trade history keeps a matching CLOSE row.",
                     symbol,
                 )
-                self.current_position = None
-                await self.persistence.async_save_position(None)
+                await self.book_executor_side_exit(
+                    self.current_position, current_price, market_conditions, "CLOSE signal"
+                )
                 return None
             if executor_pos_state is None:
                 self.logger.warning(
                     "CLOSE signal for %s skipped — failed to verify executor position state.",
                     symbol,
                 )
+                self._record_refused_command(
+                    INTENT_ACTION_CLOSE,
+                    reason=(
+                        "the executor could not confirm whether the position is open, so the "
+                        "CLOSE was not sent"
+                    ),
+                )
                 return None
 
             self.logger.info("Closing position based on analysis signal...")
-            await self.close_position("analysis_signal", current_price, market_conditions)
-            return TradeDecision(
-                timestamp=datetime.now(timezone.utc),
-                symbol=symbol,
-                action="CLOSE",
-                confidence=confidence,
-                price=current_price,
-                fee=0.0,
-                reasoning=reasoning,
+            if self._executor_query_available():
+                close_order_id = f"close-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
+                self.register_position_intent(
+                    INTENT_ACTION_CLOSE,
+                    symbol,
+                    order_id=close_order_id,
+                    position_id=position_identity(self.current_position),
+                    detail=(
+                        "CLOSE signal forwarded to the executor — the local position is NOT "
+                        "closed until the executor confirms the fill (price AND quantity)"
+                    ),
+                )
+                return TradeDecision(
+                    timestamp=datetime.now(timezone.utc),
+                    symbol=symbol,
+                    action="CLOSE",
+                    confidence=confidence,
+                    price=current_price,
+                    fee=0.0,
+                    reasoning=reasoning,
+                    order_id=close_order_id,
+                )
+            position_key = position_identity(self.current_position)
+            intent_key = self.intent_identity(
+                INTENT_ACTION_CLOSE, symbol, position_id=position_key
             )
+            self.position_intents().record(
+                INTENT_ACTION_CLOSE,
+                symbol,
+                key=intent_key,
+                position_id=position_key,
+                state=INTENT_UNKNOWN,
+                evidence="analysis_signal",
+                detail=(
+                    "CLOSE signal from the analysis with executor integration DISABLED — "
+                    "no fill evidence at all, nothing was booked"
+                ),
+                payload={"observed_price": current_price, "source": "analysis_signal"},
+            )
+            note = (
+                f"the CLOSE signal from the analysis triggered at price {current_price:,.2f}, but "
+                f"executor integration is DISABLED — the bot places no orders on the exchange "
+                f"and has no execution confirmation, so the exit was NOT "
+                f"booked (state: {INTENT_UNKNOWN}/unresolved); the local position "
+                f"STAYS, history and statistics unchanged — verify the state and the balance on the exchange"
+            )
+            self._state_divergence = note
+            self._local_exit_request = LocalExitRequest(
+                reason="analysis_signal",
+                observed_price=current_price,
+                state=INTENT_UNKNOWN,
+                intent_key=intent_key,
+                order_id=None,
+                detail=note,
+            )
+            self.logger.critical(
+                "ANALYSIS CLOSE signal for %s @ %s — NOTHING booked locally (state=%s, "
+                "position kept, no statistics entry)",
+                symbol, current_price, INTENT_UNKNOWN,
+            )
+            self._unconfirmed_intent_alert = note
+            return None
 
         old_sl = self.current_position.stop_loss  # type: ignore
         old_tp = self.current_position.take_profit  # type: ignore
@@ -89,16 +173,29 @@ class PositionManagementMixin:
         if executor_pos_state is False:
             self.logger.warning(
                 "UPDATE for %s skipped — executor confirmed no open position. "
-                "The position was closed on exchange or rejected on entry. Clearing local ghost position state.",
+                "The position was closed on exchange or rejected on entry. Booking the "
+                "exchange-side exit and clearing local ghost position state.",
                 symbol,
             )
-            self.current_position = None
-            await self.persistence.async_save_position(None)
+            await self.book_executor_side_exit(
+                self.current_position, current_price, market_conditions, "Executor confirmed flat"
+            )
             return None
         if executor_pos_state is None:
             self.logger.warning(
                 "UPDATE for %s skipped — failed to verify executor position state.",
                 symbol,
+            )
+            self._record_refused_command(
+                INTENT_ACTION_UPDATE,
+                reason=(
+                    "the executor could not confirm whether the position is open, so the "
+                    "UPDATE was not sent"
+                ),
+                requested_sl=stop_loss,
+                requested_tp=take_profit,
+                old_sl=old_sl,
+                old_tp=old_tp,
             )
             return None
 
@@ -111,10 +208,23 @@ class PositionManagementMixin:
                     "Letting trade breathe.",
                     hours_since_last, self._min_update_interval_hours, self.config.TIMEFRAME,
                 )
+                self._record_refused_command(
+                    INTENT_ACTION_UPDATE,
+                    reason=(
+                        f"only {hours_since_last:.1f}h since the last position update "
+                        f"(minimum {self._min_update_interval_hours:.1f}h at "
+                        f"{self.config.TIMEFRAME})"
+                    ),
+                    requested_sl=stop_loss,
+                    requested_tp=take_profit,
+                    old_sl=old_sl,
+                    old_tp=old_tp,
+                )
                 return None
 
         self._last_sl_tightening_evaluation = None
-        updated = await self._update_position_parameters(stop_loss, take_profit, current_price)
+        policy_price = market_price if market_price and market_price > 0 else current_price
+        updated = await self._update_position_parameters(stop_loss, take_profit, policy_price)
 
         if updated:
             self._last_position_update_time = now
@@ -134,6 +244,7 @@ class PositionManagementMixin:
             except Exception as e:  # noqa: BLE001
                 self.logger.warning("Failed to track position update: %s", e)
 
+            update_order_id = f"update-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
             decision = TradeDecision(
                 timestamp=datetime.now(timezone.utc),
                 symbol=symbol,
@@ -144,7 +255,24 @@ class PositionManagementMixin:
                 take_profit=take_profit,
                 fee=0.0,
                 reasoning=f"Updated position parameters. {reasoning}",
-                order_id=f"update-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}",
+                order_id=update_order_id,
+            )
+            self.register_position_intent(
+                INTENT_ACTION_UPDATE,
+                symbol,
+                order_id=update_order_id,
+                position_id=position_identity(self.current_position),
+                state=INTENT_PENDING if self._executor_query_available() else INTENT_LOCAL_ONLY,
+                detail=(
+                    "UPDATE forwarded to the executor — local SL/TP is a mirror awaiting its "
+                    "receipt, NOT a confirmed exchange change"
+                ),
+                payload={
+                    "old_stop_loss": old_sl,
+                    "old_take_profit": old_tp,
+                    "new_stop_loss": self.current_position.stop_loss,
+                    "new_take_profit": self.current_position.take_profit,
+                },
             )
             await self._record_trade_decision(decision)
             self.logger.info("Position updated: New SL=$%s, TP=$%s",
@@ -308,7 +436,7 @@ class PositionManagementMixin:
         quantity = risk.quantity
         size_pct = risk.size_pct
         quote_amount = risk.quote_amount
-        entry_fee = risk.entry_fee
+        entry_fee: float | None = None
 
         executor_max = float(self.config.EXECUTOR_MAX_POSITION_USDC or 0.0)
         notional = quantity * current_price
@@ -323,7 +451,6 @@ class PositionManagementMixin:
             quantity *= scale
             size_pct *= scale
             quote_amount *= scale
-            entry_fee *= scale
 
         self.logger.info(
             "Position sizing: Capital=$%s, Size=%.2f%%, Allocation=$%s, Quantity=%.6f",
@@ -373,16 +500,29 @@ class PositionManagementMixin:
             regime_profile=risk.regime_profile,
         )
 
-        if self.guard_pipeline is not None:
-            self.guard_pipeline.invalidate_cooldown_cache()
-
         await self.persistence.async_save_position(self.current_position)
         self.logger.info(
-            "Opened %s position @ $%s (SL: $%s, TP: $%s, Qty: %.6f, Fee: $%.4f)",
+            "Opened %s position @ $%s (SL: $%s, TP: $%s, Qty: %.6f, %s)",
             direction, f"{current_price:,.2f}", f"{risk.stop_loss:,.2f}",
-            f"{risk.take_profit:,.2f}", quantity, entry_fee,
+            f"{risk.take_profit:,.2f}", quantity, self._commission_text(entry_fee),
         )
-        intent.transition_to(OrderLifecycle.EXECUTED, reason="Position persisted")
+        self.register_position_intent(
+            INTENT_ACTION_ENTRY,
+            symbol,
+            order_id=order_id,
+            position_id=position_identity(self.current_position),
+            state=INTENT_PENDING if self._executor_query_available() else INTENT_LOCAL_ONLY,
+            detail=(
+                "entry forwarded to the executor — awaiting its receipt; local position is "
+                "bookkeeping, NOT a confirmed execution"
+                if self._executor_query_available()
+                else "executor integration disabled — no command sent, local bookkeeping only"
+            ),
+        )
+        intent.transition_to(
+            OrderLifecycle.READY_FOR_REVIEW,
+            reason="Intent persisted; execution awaits executor evidence",
+        )
 
         decision = TradeDecision(
             timestamp=datetime.now(timezone.utc),
@@ -415,6 +555,56 @@ class PositionManagementMixin:
         )
         await self._record_trade_decision(decision)
         return decision
+
+    def _record_refused_command(
+        self,
+        action: str,
+        *,
+        reason: str,
+        requested_sl: float | None = None,
+        requested_tp: float | None = None,
+        old_sl: float | None = None,
+        old_tp: float | None = None,
+    ) -> None:
+        """Record a command the bot refused to send, so the next analysis knows it never ran.
+
+        Nothing reached the executor, so its journals stay silent by design. Without this
+        record the next cycle would see only that the model asked for the change, never
+        that the bot blocked it — and the analysis is the only place where that context
+        can still change a decision.
+        """
+        position = self.current_position
+        if position is None:
+            return
+        attempt = f"{action.lower()}-refused-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
+        self.position_intents().record(
+            action,
+            position.symbol,
+            key=self.intent_identity(action, position.symbol, order_id=attempt),
+            position_id=position_identity(position),
+            state=INTENT_REFUSED,
+            evidence="bot_policy",
+            detail=reason,
+            payload={
+                "old_stop_loss": old_sl,
+                "old_take_profit": old_tp,
+                "requested_stop_loss": requested_sl,
+                "requested_take_profit": requested_tp,
+            },
+        )
+        if requested_sl is not None:
+            old_text = f"${old_sl:,.2f}" if old_sl is not None else "unchanged"
+            consequence = (
+                f"stop loss stays at {old_text} (the analysis asked for ${requested_sl:,.2f}) "
+                f"and NOTHING was sent to the executor"
+            )
+        else:
+            consequence = "NOTHING was sent to the executor and the position is unchanged"
+        self._rejected_intent_alert = (
+            f"{action} {position.symbol} was refused by the bot's own policy "
+            f"({reason}) — {consequence}."
+        )
+        self.logger.warning("Recorded the refused %s as a position intent: %s", action, reason)
 
     async def _update_position_parameters(
         self,
@@ -454,6 +644,14 @@ class PositionManagementMixin:
                         evaluation.reason,
                         f"{old_sl:,.2f}",
                         f"{stop_loss:,.2f}",
+                    )
+                    self._record_refused_command(
+                        INTENT_ACTION_UPDATE,
+                        reason=evaluation.reason,
+                        requested_sl=stop_loss,
+                        requested_tp=take_profit,
+                        old_sl=old_sl,
+                        old_tp=self.current_position.take_profit,
                     )
                     try:
                         pos = self.current_position
@@ -512,6 +710,19 @@ class PositionManagementMixin:
                         original_sl_distance / entry_price * 100,
                         old_sl,
                         stop_loss,
+                    )
+                    self._record_refused_command(
+                        INTENT_ACTION_UPDATE,
+                        reason=(
+                            f"widening the stop loss to "
+                            f"{proposed_sl_distance / entry_price * 100:.2f}% from entry exceeds "
+                            f"150% of the original {original_sl_distance / entry_price * 100:.2f}% "
+                            f"distance"
+                        ),
+                        requested_sl=stop_loss,
+                        requested_tp=take_profit,
+                        old_sl=old_sl,
+                        old_tp=self.current_position.take_profit,
                     )
                 else:
                     if direction == "LONG" and stop_loss < old_sl:

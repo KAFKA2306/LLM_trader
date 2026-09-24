@@ -100,7 +100,6 @@ from src.trading import (
     TradingStrategy,
 )
 from src.trading.guards.configured_symbol import ConfiguredSymbolGuard
-from src.trading.guards.cooldown_window import CooldownWindowGuard
 from src.trading.guards.max_position_size import MaxPositionSizeGuard
 from src.trading.guards.pipeline import GuardPipeline
 from src.trading.post_mortem import PostMortemService
@@ -110,7 +109,6 @@ from src.utils.format_utils import FormatUtils
 from src.utils.indicator_classifier import build_exit_execution_context_from_config
 
 # pylint: disable=wrong-import-position
-from src.utils.journal_rotator import JournalRotator
 from src.utils.keyboard_handler import KeyboardHandler
 from src.utils.timeframe_validator import TimeframeValidator
 from src.utils.token_counter import CostStorage, ModelPricing, TokenCounter
@@ -138,22 +136,6 @@ class ProvisioningMixin:
             data_dir, "trading", f"brain_{safe_symbol}_{self.config.TIMEFRAME}"
         )
         os.makedirs(brain_dir, exist_ok=True)
-
-    async def _run_maintenance_tasks(self, brain_service: TradingBrainService) -> None:
-        """Run post-provisioning maintenance: journal rotation."""
-        try:
-            rotated_count = JournalRotator().rotate_all_journals()
-            if rotated_count > 0:
-                self.logger.info(
-                    "  -> Journal maintenance: rotated %d journal file(s) to .ai/archive/",
-                    rotated_count,
-                )
-            else:
-                self.logger.info(
-                    "  -> Journal maintenance: all journal files within size limits"
-                )
-        except Exception as e:  # noqa: BLE001
-            self.logger.warning("Journal rotation maintenance skipped: %s", e)
 
     async def _provision_infrastructure(self) -> dict:
         """Provision base infrastructure components."""
@@ -566,7 +548,6 @@ class ProvisioningMixin:
             [
                 ConfiguredSymbolGuard(),
                 MaxPositionSizeGuard(),
-                CooldownWindowGuard(persistence=persistence),
             ]
         )
         self.logger.info(

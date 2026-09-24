@@ -1,16 +1,16 @@
-import { initPerformanceChart, updatePerformanceData } from './modules/performance_chart.js?v=4.5';
-import { initDecisionPathwaysPanel, updateDecisionPathways } from './modules/decision_pathways_panel.js?v=2.5';
-import { updateLogs } from './modules/log_viewer.js?v=4.7';
-import { updateVisuals } from './modules/visuals.js?v=4.5';
-import { initVectorPanel, updateVectorData } from './modules/vector_panel.js?v=4.9';
-import { initFullscreen } from './modules/fullscreen.js?v=4.6';
-import { initWebSocket, startCountdownLoop } from './modules/websocket.js?v=4.6';
-import { initPositionPanel, updatePositionData } from './modules/position_panel.js?v=4.9';
-import { initUI } from './modules/ui.js?v=4.8';
-import { initStatisticsPanel, updateStatisticsData } from './modules/statistics_panel.js?v=4.6';
-import { initNewsPanel, updateNewsData } from './modules/news_panel.js?v=4.7';
-import { initPostMortemPanel, updatePostMortemData } from './modules/post_mortem_panel.js?v=1.2';
-import { initConsolePanel } from './modules/console_panel.js?v=1.0';
+import { initPerformanceChart, updatePerformanceData } from './modules/performance_chart.js?v=4.6';
+import { initDecisionPathwaysPanel, updateDecisionPathways } from './modules/decision_pathways_panel.js?v=2.6';
+import { updateLogs } from './modules/log_viewer.js?v=4.8';
+import { updateVisuals } from './modules/visuals.js?v=4.6';
+import { initVectorPanel, updateVectorData } from './modules/vector_panel.js?v=4.10';
+import { initFullscreen } from './modules/fullscreen.js?v=4.7';
+import { initWebSocket, startCountdownLoop } from './modules/websocket.js?v=4.7';
+import { initPositionPanel, updatePositionData } from './modules/position_panel.js?v=4.10';
+import { initUI } from './modules/ui.js?v=4.9';
+import { initStatisticsPanel, updateStatisticsData } from './modules/statistics_panel.js?v=4.7';
+import { initNewsPanel, updateNewsData } from './modules/news_panel.js?v=4.8';
+import { initPostMortemPanel, updatePostMortemData } from './modules/post_mortem_panel.js?v=1.3';
+import { initConsolePanel } from './modules/console_panel.js?v=1.1';
 
 const state = {
     isConnected: false,
@@ -73,8 +73,6 @@ function updateCostDisplay(data) {
 }
 
 async function fetchBrainStatus() {
-    // Looked up once before the request: the catch branch below drives the same
-    // two indicators, so it needs them too.
     const connStatus = document.getElementById('connection-status');
     const statusDot = document.querySelector('.status-dot');
     try {
@@ -85,7 +83,7 @@ async function fetchBrainStatus() {
             connStatus.textContent = 'Connected';
             connStatus.classList.remove('status-text', 'disconnected');
             connStatus.classList.add('status-text', 'connected');
-            connStatus.style.color = ''; // Clear inline style if present
+            connStatus.style.color = ''; 
         }
 
         if (statusDot) {
@@ -104,7 +102,7 @@ async function fetchBrainStatus() {
             } else if (data.trend === 'BEARISH') {
                 trendEl.className = 'value start-red';
             } else {
-                trendEl.className = 'value'; // default color
+                trendEl.className = 'value'; 
             }
         }
 
@@ -127,7 +125,7 @@ async function fetchBrainStatus() {
             connStatus.textContent = 'Disconnected';
             connStatus.classList.remove('status-text', 'connected');
             connStatus.classList.add('status-text', 'disconnected');
-            connStatus.style.color = ''; // Clear inline style if present
+            connStatus.style.color = ''; 
         }
 
         if (statusDot) {
@@ -142,7 +140,6 @@ async function fetchRules() {
         const response = await fetch('/api/brain/rules');
         const rules = await response.json();
 
-        // Direct update to Rules Count KPI
         const countEl = document.getElementById('overview-rules-count');
         const hintEl = document.getElementById('overview-rules-hint');
 
@@ -227,9 +224,7 @@ function initApp() {
 
     window.togglePanelMinimize = togglePanelMinimize;
 
-    // Mobile menu is fully managed by setupMobileMenu() in modules/ui.js
 
-    // Event listeners for static buttons — independent of panel inits
     try {
         const btnMinimize = document.getElementById('btn-minimize-visuals');
         if (btnMinimize) {
@@ -261,10 +256,7 @@ function initApp() {
         }
     } catch (e) { console.error('btn-copy-response setup failed:', e); }
 
-    // Panel initializers — each isolated so one failure doesn't cascade
     const _safeInit = (name, fn) => { try { fn(); } catch (e) { console.error(name + ' init failed:', e); } };
-    // Pollers and event listeners are fire-and-forget: without a catch here a
-    // rejection inside a lane stays an unhandled promise rejection.
     const _runSafely = (name, fn) => { Promise.resolve().then(fn).catch((e) => console.error(name + ' failed:', e)); };
 
     _safeInit('initPerformanceChart', initPerformanceChart);
@@ -280,14 +272,11 @@ function initApp() {
     _safeInit('initUI', initUI);
     _safeInit('startCountdownLoop', startCountdownLoop);
 
-    // Initial update
     _runSafely('updateAll', updateAll);
 
-    // Start polling lanes: fast for critical status/position, slow for heavier panels.
     setInterval(() => _runSafely('updateFastLane', updateFastLane), state.fastPollInterval);
     setInterval(() => _runSafely('updateSlowLane', updateSlowLane), state.slowPollInterval);
 
-    // Listen for WS analysis complete
     document.addEventListener('analysis-complete', () => {
         console.log('Analysis complete, refreshing...');
         _runSafely('updateFastLane', updateFastLane);
@@ -314,7 +303,6 @@ function initApp() {
     console.log('Dashboard App Initialized');
 }
 
-// Run init when DOM is ready
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', initApp);
 } else {

@@ -263,7 +263,7 @@ class RiskManager:
 
         allocation = capital * final_size_pct
         quantity = allocation / current_price
-        entry_fee = allocation * self.config.TRANSACTION_FEE_PERCENT
+        entry_fee: float | None = None
 
         sl_distance_pct = abs(current_price - final_sl) / current_price
         tp_distance_pct = abs(final_tp - current_price) / current_price

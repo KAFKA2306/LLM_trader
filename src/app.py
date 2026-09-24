@@ -4,6 +4,7 @@ This module defines the `CryptoTradingBot` class, which orchestrates the interac
 between various components like the market analyzer, trading strategy, and external APIs.
 """
 import asyncio
+import inspect
 import io
 import os
 import time
@@ -22,6 +23,11 @@ from src.trading import (
     TradingStatisticsService,
 )
 from src.trading.data_models import TradeDecision
+from src.trading.executor_reconciliation import (
+    NON_BOOKED_INTENT_STATES,
+    RECONCILE_UNVERIFIED,
+    LocalPositionReconciliation,
+)
 from src.utils.decorators import retry_async
 from src.utils.timeframe_validator import TimeframeValidator
 
@@ -34,6 +40,10 @@ SLEEP_CHUNK_SIZE = 1.0
 CANDLE_BUFFER_SECONDS = 2
 ERROR_WAIT_SHORT = 60
 ERROR_WAIT_LONG = 300
+
+ACTIONABLE_RECOMMENDATIONS = frozenset(
+    {"BUY", "SELL", "LONG", "SHORT", "UPDATE", "CLOSE", "CLOSE_LONG", "CLOSE_SHORT"}
+)
 
 
 _MARKET_KNOWLEDGE_FALLBACK_MSG = "continuing with cached/partial market knowledge"
@@ -299,7 +309,13 @@ class CryptoTradingBot:
 
         current_ticker, current_price = await self._fetch_ticker_data()
         await self._check_position_status(current_price, is_candle_close=is_candle_close)
+        await self._forward_local_exit_request()
         await self._execute_market_knowledge_update(force_news_update)
+
+        reconcile_outcome = await self._reconcile_position_state(source="pre_analysis")
+        snapshot_before = self._position_snapshot_token()
+        protection_before = self._protection_snapshot()
+        protection_version_before = await self._protection_version()
 
         self.logger.info("Running market analysis...")
         context_data = await self._build_analysis_context(current_price, current_ticker)
@@ -309,18 +325,60 @@ class CryptoTradingBot:
             self.logger.error("Analysis failed: %s", result["error"])
             return
 
+        snapshot_after_analysis = self._position_snapshot_token()
+        stale_recommendation = (
+            snapshot_before is not None
+            and snapshot_after_analysis is not None
+            and snapshot_before != snapshot_after_analysis
+        )
+
         result["_social_sentiment_reddit"] = self._reddit_sentiment_label
         demo_capital = float(self.config.DEMO_QUOTE_CAPITAL)
         current_capital = self.statistics_service.get_current_capital(demo_capital)
         result["_portfolio_pnl_pct"] = ((current_capital - demo_capital) / demo_capital * 100) if demo_capital > 0 else 0.0
 
         await self.persistence.async_save_last_analysis_time()
-        decision = await self.trading_strategy.process_analysis(result, self.current_symbol)
+        if stale_recommendation:
+            action = str((result.get("analysis") or {}).get("signal") or "UNKNOWN").upper()
+            self.logger.warning(
+                "Discarding stale %s recommendation: the position changed during the "
+                "analysis (%s -> %s) — not forwarding it to the executor.",
+                action, snapshot_before, snapshot_after_analysis,
+            )
+            decision = None
+        else:
+            decision = await self.trading_strategy.process_analysis(
+                result, self.current_symbol, market_price=current_price
+            )
+
+        protection_after = self._protection_snapshot()
+        protection_guard_note = self._protection_guard_note(
+            decision, protection_before, protection_after
+        )
+        if decision is not None and protection_guard_note:
+            self.logger.warning(
+                "Discarding %s recommendation: %s", decision.action, protection_guard_note
+            )
+            decision = None
+
+        protection_version_after = await self._protection_version()
+        protection_version_note = self._protection_version_guard(
+            decision, protection_version_before, protection_version_after
+        )
+        if decision is not None and protection_version_note:
+            self.logger.warning(
+                "Discarding stale %s recommendation: %s", decision.action, protection_version_note
+            )
+            decision = None
 
         if decision:
             await self._handle_new_position(decision, current_price)
         else:
             self.logger.info("No trading action taken")
+        await self._report_executor_side_exit()
+        await self._report_state_divergence()
+
+        intent_state: str | None = None
 
         if decision is not None and decision.action == "HOLD" and result.get("analysis"):
             self._patch_rejected_signal_in_response(result, decision)
@@ -333,9 +391,318 @@ class CryptoTradingBot:
                     self.current_symbol, forward_delivered,
                     order_id=decision.order_id,
                 )
+            intent_state = await self._resolve_position_intents(decision, forward_delivered)
 
-        await self._send_discord_notification(result)
+        execution_note = self._build_execution_note(
+            result, decision, stale_recommendation, reconcile_outcome,
+            protection_guard_note=protection_guard_note,
+            protection_version_note=protection_version_note,
+            intent_state=intent_state,
+        )
+        await self._send_discord_notification(result, execution_note=execution_note)
+        await self._report_unconfirmed_intent()
+        await self._report_rejected_intent()
         await self._save_analysis_data(result)
+
+    async def _forward_local_exit_request(self) -> str | None:
+        """Forward a CLOSE the local SL/TP monitor requested to the executor.
+
+        The monitor can detect that the bracket was reached but it cannot close the
+        trade on the exchange, and a ticker price is not a fill — so the only thing
+        this does is hand the already-recorded intent to the executor. With no
+        executor handler (or no queued recommendation) nothing is sent: the intent
+        stays pending/unknown, the local position stays, and never a local close at
+        the ticker price.
+
+        Returns the resulting intent state, or None when there was nothing to send.
+        """
+        if self.executor_handler is None:
+            return None
+        taker = getattr(self.trading_strategy, "take_pending_local_close_decision", None)
+        if not callable(taker):
+            return None
+        try:
+            decision = taker()
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning("Failed to read the pending local exit recommendation: %s", e)
+            return None
+        if decision is None:
+            return None
+
+        try:
+            delivered = await self.executor_handler.handle(
+                {"signal": "CLOSE"}, decision, self.current_symbol
+            )
+        except Exception as e:  # noqa: BLE001
+            self.logger.error("Forwarding the local exit recommendation failed: %s", e)
+            delivered = False
+        self.logger.warning(
+            "Local exit recommendation forwarded for %s (order_id=%s, delivered=%s) — the "
+            "local position is NOT closed until the executor's fill evidence arrives.",
+            self.current_symbol, getattr(decision, "order_id", None), delivered,
+        )
+        return await self._resolve_position_intents(decision, delivered)
+
+    async def _reconcile_position_state(self, source: str) -> LocalPositionReconciliation | None:
+        """Run the strategy's public reconciliation hook (no-op when not wired).
+
+        The hook books a validated exchange-side exit exactly once; an unwired or
+        non-conforming strategy is left untouched (a test double must not decide the
+        trading state).
+        """
+        hook = getattr(self.trading_strategy, "reconcile_local_position", None)
+        if not callable(hook):
+            return None
+        try:
+            pending = hook(source=source)
+            if not inspect.isawaitable(pending):
+                return None
+            outcome = await pending
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning("Position reconciliation (%s) failed: %s", source, e)
+            return None
+        return outcome if isinstance(outcome, LocalPositionReconciliation) else None
+
+    async def _resolve_position_intents(self, decision: Any, delivered: bool) -> str | None:
+        """Hand the forwarded command's intent to the strategy for evidence-based closure.
+
+        Only the strategy's executor evidence may confirm it; a missing hook (test double,
+        no intent layer) leaves the state unknown here instead of inventing one.
+        """
+        resolver = getattr(self.trading_strategy, "resolve_position_intents_after_forward", None)
+        state: Any = None
+        if callable(resolver):
+            try:
+                pending = resolver(
+                    order_id=getattr(decision, "order_id", None),
+                    delivered=delivered,
+                    symbol=self.current_symbol,
+                )
+                if inspect.isawaitable(pending):
+                    state = await pending
+            except Exception as e:  # noqa: BLE001
+                self.logger.warning("Failed to resolve the forwarded position intent: %s", e)
+        elif callable(getattr(self.trading_strategy, "position_intent_state", None)):
+            state = self.trading_strategy.position_intent_state(
+                order_id=getattr(decision, "order_id", None)
+            )
+        return state if isinstance(state, str) else None
+
+    async def _report_unconfirmed_intent(self) -> None:
+        """Alert the operator about a command whose execution the executor never confirmed.
+
+        Wave 2: an entry/UPDATE/CLOSE the bot sent is an INTENT. Silence is not a fill:
+        the local state stays pending/unknown, the position is left alone, and this is
+        the only place that turns that into a visible alert (never a silent close).
+        """
+        alert = None
+        hook = getattr(self.trading_strategy, "take_unconfirmed_intent_alert", None)
+        if callable(hook):
+            try:
+                alert = hook()
+            except Exception as e:  # noqa: BLE001
+                self.logger.warning("Failed to read the unconfirmed-intent alert: %s", e)
+        if not isinstance(alert, str) or not alert:
+            return
+        self.logger.critical("UNCONFIRMED POSITION INTENT: %s", alert)
+        if self.discord_notifier is None:
+            return
+        try:
+            await self.discord_notifier.send_message(
+                "⚠️ **Unconfirmed command** — it was sent to the executor, but there is no "
+                f"proof it was executed: {alert}. I am not changing the local state and not "
+                "closing the position silently — check the exchange.",
+                channel_id=self.config.MAIN_CHANNEL_ID,
+            )
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning("Failed to send the unconfirmed-intent alert: %s", e)
+
+    async def _report_rejected_intent(self) -> None:
+        """Alert the operator about a command the bot's own policy refused to send.
+
+        A refusal is not a missing confirmation: nothing was sent, so the exchange
+        never saw the command and the model's request silently died inside the bot.
+        The next analysis prompt carries it too (see the intent ledger).
+        """
+        alert = None
+        hook = getattr(self.trading_strategy, "take_rejected_intent_alert", None)
+        if callable(hook):
+            try:
+                alert = hook()
+            except Exception as e:  # noqa: BLE001
+                self.logger.warning("Failed to read the rejected-intent alert: %s", e)
+        if not isinstance(alert, str) or not alert:
+            return
+        self.logger.warning("REFUSED POSITION INTENT: %s", alert)
+        if self.discord_notifier is None:
+            return
+        try:
+            await self.discord_notifier.send_message(
+                "🚫 **Command refused by the bot** — it never reached the executor and "
+                f"nothing changed on the exchange: {alert} The next analysis sees this "
+                "refusal, so the model will not keep assuming the order went through.",
+                channel_id=self.config.MAIN_CHANNEL_ID,
+            )
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning("Failed to send the rejected-intent alert: %s", e)
+
+    def _position_snapshot_token(self) -> str | None:
+        """Current position revision token, or None when the strategy has no contract."""
+        token_fn = getattr(self.trading_strategy, "position_snapshot_token", None)
+        if not callable(token_fn):
+            return None
+        token = token_fn()
+        return token if isinstance(token, str) else None
+
+    def _protection_snapshot(self) -> tuple[Any, Any] | None:
+        """(stop_loss, take_profit) of the current position, or None without a contract."""
+        snapshot_fn = getattr(self.trading_strategy, "protection_snapshot", None)
+        if not callable(snapshot_fn):
+            return None
+        snapshot = snapshot_fn()
+        return tuple(snapshot) if isinstance(snapshot, tuple) and len(snapshot) == 2 else None
+
+    async def _protection_version(self) -> str | None:
+        """Protection revision the executor reports, or None without that contract.
+
+        Wave-5 requirement (3). The strategy's ``executor_protection_version`` asks the
+        executor's ``/position`` for its ``protection_version`` (monotonic counter of
+        protection changes; ``0`` = none observed, returned verbatim). An older executor
+        without the field gives None, in which case the guard below stays inert (it
+        never guesses a version). A strategy double / older strategy without the method
+        also yields None — the guard must not fail a trading cycle over a missing hook.
+        """
+        version_fn = getattr(self.trading_strategy, "executor_protection_version", None)
+        if not callable(version_fn):
+            return None
+        try:
+            version = await version_fn()
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning("Protection version query failed: %s", e)
+            return None
+        return str(version) if version is not None else None
+
+    def _protection_version_guard(
+        self,
+        decision: TradeDecision | None,
+        version_before: str | None,
+        version_after: str | None,
+    ) -> str | None:
+        """Refuse an UPDATE computed against a protection set that was replaced.
+
+        Only meaningful when BOTH reads returned a revision (the executor's additive
+        ``protection_version``): a different value means the protection was replaced while
+        the model was working, so the UPDATE describes a state that no longer exists. A
+        missing revision is not treated as "unchanged" — it is "unversioned", and the
+        wave-1 loosening guard remains the substitute (see ``_protection_guard_note``).
+        """
+        if decision is None or str(getattr(decision, "action", "") or "").upper() != "UPDATE":
+            return None
+        if not version_before or not version_after:
+            return None
+        if version_before == version_after:
+            return None
+        return (
+            f"the protection version changed during the analysis ({version_before} -> "
+            f"{version_after}) — the UPDATE describes outdated protection"
+        )
+
+    def _protection_guard_note(
+        self,
+        decision: TradeDecision | None,
+        protection_before: tuple[Any, Any] | None,
+        protection_after: tuple[Any, Any] | None,
+    ) -> str | None:
+        """Refuse an UPDATE whose protection snapshot is no longer current, or None.
+
+        Only consulted when the protection actually changed during the analysis (this
+        token pairs SL/TP and cannot version a REPLACED set; the executor's
+        ``protection_version`` is the versioned guard — see ``_protection_version_guard``,
+        which runs on top of this one). The strategy's monotone guard then decides:
+        tightening passes, loosening is refused. Without that guard the safe answer is to
+        refuse, not to forward.
+        """
+        if decision is None or str(getattr(decision, "action", "")).upper() != "UPDATE":
+            return None
+        if protection_before is None or protection_after is None:
+            return None
+        if protection_before == protection_after:
+            return None
+        guard = getattr(self.trading_strategy, "protection_loosening_reason", None)
+        if not callable(guard):
+            return (
+                f"protection changed during the analysis ({protection_before} -> "
+                f"{protection_after}) and the strategy exposes no protection guard"
+            )
+        reason = guard(decision)
+        return reason if isinstance(reason, str) else None
+
+    def _build_execution_note(
+        self,
+        result: dict[str, Any],
+        decision: TradeDecision | None,
+        stale_recommendation: bool,
+        reconcile_outcome: LocalPositionReconciliation | None,
+        protection_guard_note: str | None = None,
+        protection_version_note: str | None = None,
+        intent_state: str | None = None,
+    ) -> str | None:
+        """Explain WHY an actionable recommendation was not executed, or None.
+
+        Returns None only when the recommendation WAS performed with executor evidence
+        (or when there was nothing actionable to perform). A command that was forwarded
+        but not yet confirmed keeps its note: the card must say pending/unknown instead
+        of showing an execution. The text is shown verbatim on the Discord card.
+        """
+        analysis = result.get("analysis") or {}
+        signal = str(analysis.get("signal") or "").upper()
+        if signal not in ACTIONABLE_RECOMMENDATIONS:
+            return None
+
+        action = str(getattr(decision, "action", "") or "").upper() if decision is not None else ""
+        if decision is not None and action in ACTIONABLE_RECOMMENDATIONS:
+            if intent_state in NON_BOOKED_INTENT_STATES:
+                return (
+                    f"Recommendation {signal} was SENT to the executor, but its execution "
+                    f"is UNCONFIRMED (state: {intent_state}) — no proof from the executor. "
+                    f"The local state and statistics do NOT count it as executed; the local "
+                    f"position stays unchanged."
+                )
+            return None
+
+        if protection_version_note:
+            reason = (
+                "the position protection was replaced during the analysis, so the proposed "
+                f"UPDATE describes an outdated state: {protection_version_note}"
+            )
+        elif protection_guard_note:
+            reason = (
+                "the position protection changed during the analysis and the proposed UPDATE "
+                f"would loosen the protection: {protection_guard_note}"
+            )
+        elif stale_recommendation:
+            reason = (
+                "the position changed during the analysis (an exit or an exchange close "
+                "was detected) — the result describes an outdated position, so it was not "
+                "executed and not turned into a new entry"
+            )
+        elif decision is not None and action == "HOLD":
+            detail = str(getattr(decision, "reasoning", "") or "no reason given")
+            reason = f"the strategy rejected the recommendation: {detail}"
+        elif getattr(reconcile_outcome, "state", None) == RECONCILE_UNVERIFIED:
+            detail = getattr(reconcile_outcome, "detail", None) or "no reply from the executor"
+            reason = f"the exchange did not confirm the position state ({detail}) — not executed"
+        elif getattr(self.trading_strategy, "current_position", None) is None:
+            reason = (
+                "no open local position (exit detected/settled) — "
+                "there is nothing to update or close"
+            )
+        else:
+            reason = (
+                "the strategy did not execute the recommendation (update interval, guard or "
+                "missing confirmation) — the local position is still open"
+            )
+        return f"Recommendation {signal} NOT executed: {reason}."
 
     def _log_check_header(self, check_count: int):
         """Log trading check header"""
@@ -465,6 +832,23 @@ class CryptoTradingBot:
         current_capital = self.statistics_service.get_current_capital(demo_capital)
         return self.ev_formatter.build_ev_framework_section(current_capital)
 
+    async def _report_executor_side_exit(self) -> None:
+        """Send the closing performance summary after an exchange-side exit.
+
+        The exchange closed the position (SL/TP filled), so the local monitor never
+        saw a close and reports nothing. The strategy books the trade from the
+        executor's exit journal and flags the reason for us here.
+        """
+        reason = self.trading_strategy.take_executor_side_exit_reason()
+        if not isinstance(reason, str) or not reason:
+            return
+
+        self.logger.info("Exchange-side exit booked (%s) — sending performance summary", reason)
+        try:
+            await self._require_position_monitor().handle_position_closed(reason)
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning("Failed to report exchange-side exit: %s", e)
+
     async def _handle_new_position(self, decision, current_price: float | None):
         """Handle new position creation and status updates"""
         if decision.action not in ("BUY", "SELL"):
@@ -482,8 +866,12 @@ class CryptoTradingBot:
 
         await self._require_position_monitor().handle_new_position(current_price)
 
-    async def _send_discord_notification(self, result: dict[str, Any]):
-        """Send Discord notification with analysis results"""
+    async def _send_discord_notification(self, result: dict[str, Any], execution_note: str | None = None):
+        """Send Discord notification with analysis results.
+
+        ``execution_note`` marks a recommendation the bot did NOT perform, so the card
+        never shows a bare signal that reads as an executed action.
+        """
         if self.discord_notifier:
             chart_image = None
             last_chart_buffer = self.market_analyzer.last_chart_buffer if self.market_analyzer else None
@@ -497,7 +885,8 @@ class CryptoTradingBot:
                 symbol=self.current_symbol,
                 timeframe=self.current_timeframe,
                 channel_id=self.config.MAIN_CHANNEL_ID,
-                chart_image=chart_image
+                chart_image=chart_image,
+                execution_note=execution_note
             )
 
     async def _save_analysis_data(self, result: dict[str, Any]):
@@ -514,7 +903,7 @@ class CryptoTradingBot:
         """Rewrite ``result["raw_response"]`` when the strategy vetoed a BUY/SELL.
 
         The LLM sees its own previous response as context next cycle.  If it
-        output BUY but the strategy blocked it (R/R guard, cooldown, etc.),
+        output BUY but the strategy blocked it (R/R guard, size cap, etc.),
         the LLM gets confused: "I said BUY, why is there no position?"
 
         This patches the JSON block — replacing BUY/SELL with HOLD and
@@ -722,3 +1111,25 @@ class CryptoTradingBot:
         self.logger.info("Reload requested - shutting down for in-place restart...")
         self.running = False
 
+    async def _report_state_divergence(self) -> None:
+        """Alert the operator when the executor's view and the local position disagree.
+
+        The strategy KEEPS its local position when the executor reports flat without
+        an exit record (a false "flat" is possible — see ``book_executor_side_exit``),
+        so the mismatch needs a human look at the exchange instead of a silent guess.
+        """
+        message = self.trading_strategy.take_state_divergence()
+        if not isinstance(message, str) or not message:
+            return
+        self.logger.critical("State divergence reported to the operator: %s", message)
+        if self.discord_notifier is None:
+            return
+        try:
+            await self.discord_notifier.send_message(
+                "⚠️ **Bot/exchange state divergence** — I did not book the close, "
+                f"because the executor has no exit record. {message}. Check the exchange "
+                "for SL/TP orders and the balance, then let me know — I will fix the state.",
+                channel_id=self.config.MAIN_CHANNEL_ID,
+            )
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning("Failed to send state-divergence alert: %s", e)

@@ -1,22 +1,12 @@
-/* global DOMPurify */
-/**
- * Position panel module - Displays active position details, entry/exit prices, and SL/TP distances.
- */
 
 let lastPosition = null;
 
-/**
- * Initialize position panel.
- */
 export function initPositionPanel() {
     const container = document.getElementById('position-content');
     if (!container) return;
     updatePositionData();
 }
 
-/**
- * Format time duration to human readable string (e.g., "2h 35m" or "3d 5h").
- */
 function formatDuration(seconds) {
     if (seconds < 0) seconds = 0;
     const days = Math.floor(seconds / 86400);
@@ -28,9 +18,6 @@ function formatDuration(seconds) {
     return `${Math.floor(seconds)}s`;
 }
 
-/**
- * Calculate unrealized P&L percentage.
- */
 function calculatePnL(entryPrice, currentPrice, direction) {
     if (!entryPrice || !currentPrice) return 0;
     const diff = direction === 'LONG'
@@ -71,16 +58,10 @@ function formatExecutionPolicy(policy, prefix) {
     return `${executionType} / ${checkInterval}`;
 }
 
-/**
- * Update position panel with latest data.
- * @param {number|null} currentPrice - Optional price to use
- * @param {boolean} fetchFresh - If true, fetch fresh price from exchange
- */
 export async function updatePositionData(currentPrice = null, fetchFresh = false) {
     const container = document.getElementById('position-content');
     if (!container) return;
     try {
-        // Optionally fetch fresh price from exchange
         if (fetchFresh) {
             try {
                 const priceResponse = await fetch('/api/brain/refresh-price');
@@ -187,48 +168,36 @@ export async function updatePositionData(currentPrice = null, fetchFresh = false
     }
 }
 
-/**
- * Calculate gauge position (0-100) for current price between SL and TP.
- */
 function calculateGaugePosition(position, currentPrice) {
     const sl = position.stop_loss;
     const tp = position.take_profit;
     const entry = position.entry_price;
     const direction = position.direction;
 
-    // Handle invalid range
     if (tp === sl) return 50;
 
-    // Fix entry at 50%
     if (currentPrice === entry) return 50;
 
-    // The gauge logic depends on direction for SL/TP relationship
-    // For LONG: SL < Entry < TP
-    // For SHORT: TP < Entry < SL
 
     if (direction === 'LONG') {
         if (currentPrice < entry) {
-            // Scale in [0, 50] range between SL and Entry
             const range = entry - sl;
             if (range <= 0) return 0;
             const pos = ((currentPrice - sl) / range) * 50;
             return Math.max(0, Math.min(50, pos));
         } else {
-            // Scale in [50, 100] range between Entry and TP
             const range = tp - entry;
             if (range <= 0) return 100;
             const pos = 50 + ((currentPrice - entry) / range) * 50;
             return Math.max(50, Math.min(100, pos));
         }
-    } else { // SHORT
+    } else { 
         if (currentPrice > entry) {
-            // Scale in [0, 50] range between SL and Entry (SL is higher in SHORT)
             const range = sl - entry;
             if (range <= 0) return 0;
             const pos = ((sl - currentPrice) / range) * 50;
             return Math.max(0, Math.min(50, pos));
         } else {
-            // Scale in [50, 100] range between Entry and TP (TP is lower in SHORT)
             const range = entry - tp;
             if (range <= 0) return 100;
             const pos = 50 + ((entry - currentPrice) / range) * 50;
@@ -237,9 +206,6 @@ function calculateGaugePosition(position, currentPrice) {
     }
 }
 
-/**
- * Get last known position data.
- */
 export function getLastPosition() {
     return lastPosition;
 }

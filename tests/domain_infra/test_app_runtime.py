@@ -150,6 +150,98 @@ def trading_check_bot(**overrides: Any) -> SimpleNamespace:
     )
 
 
+async def test_exchange_side_exit_reports_through_the_position_monitor() -> None:
+    """A flagged exchange-side exit sends the closing summary the monitor never saw."""
+    harness = trading_check_bot()
+    harness.position_monitor.handle_position_closed = AsyncMock()
+    harness.trading_strategy.take_executor_side_exit_reason = MagicMock(
+        return_value="Executor confirmed flat — stop_loss_filled @ 78800.0"
+    )
+
+    await harness.bot._report_executor_side_exit()
+
+    harness.position_monitor.handle_position_closed.assert_awaited_once_with(
+        "Executor confirmed flat — stop_loss_filled @ 78800.0"
+    )
+
+
+async def test_no_closing_summary_without_a_booked_exchange_exit() -> None:
+    """Nothing is reported when no exit was booked, or when the flag is not a reason string."""
+    harness = trading_check_bot()
+    harness.position_monitor.handle_position_closed = AsyncMock()
+
+    harness.trading_strategy.take_executor_side_exit_reason = MagicMock(return_value=None)
+    await harness.bot._report_executor_side_exit()
+    harness.position_monitor.handle_position_closed.assert_not_awaited()
+
+    harness.trading_strategy.take_executor_side_exit_reason = MagicMock(return_value=MagicMock())
+    await harness.bot._report_executor_side_exit()
+    harness.position_monitor.handle_position_closed.assert_not_awaited()
+
+
+async def test_state_divergence_is_alerted_to_the_operator() -> None:
+    """When the executor claims flat without an exit record, the operator gets told."""
+    harness = trading_check_bot()
+    harness.discord_notifier.send_message = AsyncMock()
+    harness.trading_strategy.take_state_divergence = MagicMock(
+        return_value="executor reports no open position for BTC/USDC, but has no exit record"
+    )
+
+    await harness.bot._report_state_divergence()
+
+    calls = harness.discord_notifier.send_message.await_args_list
+    assert len(calls) == 1
+    assert "no exit record" in calls[0].args[0]
+
+
+async def test_local_exit_recommendation_is_forwarded_never_closed_locally() -> None:
+    """A local SL/TP request leaves the bot as a COMMAND to the executor.
+
+    Wave 3: the monitor detects the bracket but cannot close on the exchange, so the
+    queued CLOSE recommendation is drained here and forwarded. Nothing local is booked
+    — the intent stays pending until the executor's fill evidence arrives.
+    """
+    from src.trading.data_models import TradeDecision
+
+    executor_handler = MagicMock()
+    executor_handler.handle = AsyncMock(return_value=True)
+    harness = trading_check_bot(executor_handler=executor_handler)
+    decision = TradeDecision(
+        timestamp=datetime.now(timezone.utc),
+        symbol="BTC/USDC",
+        action="CLOSE",
+        confidence="HIGH",
+        price=78000.0,
+        fee=0.0,
+        reasoning="the local exit condition stop_loss",
+        order_id="close-1",
+    )
+    harness.trading_strategy.take_pending_local_close_decision = MagicMock(return_value=decision)
+    harness.trading_strategy.resolve_position_intents_after_forward = AsyncMock(
+        return_value="pending"
+    )
+
+    state = await harness.bot._forward_local_exit_request()
+
+    assert state == "pending"
+    executor_handler.handle.assert_awaited_once()
+    assert executor_handler.handle.await_args.args == ({"signal": "CLOSE"}, decision, "BTC/USDC")
+    harness.trading_strategy.resolve_position_intents_after_forward.assert_awaited_once_with(
+        order_id="close-1", delivered=True, symbol="BTC/USDC"
+    )
+
+
+async def test_local_exit_recommendation_is_queued_when_no_executor_handler_exists() -> None:
+    """No handler -> nothing is sent AND the recommendation is not consumed."""
+    executor_handler_missing = trading_check_bot()
+    executor_handler_missing.trading_strategy.take_pending_local_close_decision = MagicMock(
+        return_value=SimpleNamespace(action="CLOSE", order_id="close-1")
+    )
+
+    assert await executor_handler_missing.bot._forward_local_exit_request() is None
+    executor_handler_missing.trading_strategy.take_pending_local_close_decision.assert_not_called()
+
+
 def test_reload_flag_lifecycle():
     manager = shutdown_manager()
     try:
@@ -345,9 +437,6 @@ def test_crash_hooks_write_unhandled_errors_into_errors_log(tmp_path, monkeypatc
     assert "TEST: fallback writer" in written
     assert "RuntimeError" in written
 
-    # Windows keeps an exclusive lock on open files: release the errors.log handler
-    # before deleting it, or unlink() fails with WinError 32. The crash path itself is
-    # unchanged: the fallback writer re-creates the file on the next crash (asserted below).
     for handler in list(logger.handlers):
         base = getattr(handler, "baseFilename", None)
         if base is not None and Path(base) == crash_path:
@@ -370,3 +459,126 @@ def test_crash_writer_is_a_noop_without_a_configured_path(monkeypatch):
         raise RuntimeError("must not be written anywhere")
     except RuntimeError as exc:
         _write_fallback_crash(type(exc), exc, exc.__traceback__)
+
+
+async def test_unconfirmed_command_is_alerted_to_the_operator() -> None:
+    """A forwarded command without executor evidence raises a loud operator alert."""
+    harness = trading_check_bot()
+    harness.discord_notifier.send_message = AsyncMock()
+    harness.trading_strategy.take_unconfirmed_intent_alert = MagicMock(
+        return_value="CLOSE BTC/USDC was not confirmed by the executor"
+    )
+
+    await harness.bot._report_unconfirmed_intent()
+
+    calls = harness.discord_notifier.send_message.await_args_list
+    assert len(calls) == 1
+    assert "was not confirmed by the executor" in calls[0].args[0]
+    assert "no proof it was executed" in calls[0].args[0]
+
+
+async def test_no_unconfirmed_alert_without_an_unconfirmed_intent() -> None:
+    """Nothing is sent when the strategy reports no pending/unknown command."""
+    harness = trading_check_bot()
+    harness.discord_notifier.send_message = AsyncMock()
+
+    harness.trading_strategy.take_unconfirmed_intent_alert = MagicMock(return_value=None)
+    await harness.bot._report_unconfirmed_intent()
+    harness.discord_notifier.send_message.assert_not_awaited()
+
+    harness.trading_strategy.take_unconfirmed_intent_alert = MagicMock(return_value=MagicMock())
+    await harness.bot._report_unconfirmed_intent()
+    harness.discord_notifier.send_message.assert_not_awaited()
+
+
+async def test_refused_command_is_alerted_to_the_operator() -> None:
+    """A command the bot's own policy refused is reported, never swallowed silently."""
+    harness = trading_check_bot()
+    harness.discord_notifier.send_message = AsyncMock()
+    harness.trading_strategy.take_rejected_intent_alert = MagicMock(
+        return_value="UPDATE BTC/USDC was refused by the bot's own policy (progress 14.6% < 15.0%)"
+    )
+
+    await harness.bot._report_rejected_intent()
+
+    calls = harness.discord_notifier.send_message.await_args_list
+    assert len(calls) == 1
+    assert "refused by the bot's own policy" in calls[0].args[0]
+    assert "never reached the executor" in calls[0].args[0]
+
+
+async def test_no_refused_alert_without_a_refused_command() -> None:
+    """Nothing is sent while the strategy reports no refusal."""
+    harness = trading_check_bot()
+    harness.discord_notifier.send_message = AsyncMock()
+    harness.trading_strategy.take_rejected_intent_alert = MagicMock(return_value=None)
+
+    await harness.bot._report_rejected_intent()
+
+    harness.discord_notifier.send_message.assert_not_awaited()
+
+
+async def test_forwarded_command_is_resolved_through_the_strategy_hook() -> None:
+    """The app hands the forwarded command's intent to the strategy (evidence required)."""
+    harness = trading_check_bot()
+    harness.trading_strategy.resolve_position_intents_after_forward = AsyncMock(
+        return_value="unknown"
+    )
+    decision = SimpleNamespace(action="CLOSE", order_id="close-1")
+
+    state = await harness.bot._resolve_position_intents(decision, True)
+
+    assert state == "unknown"
+    harness.trading_strategy.resolve_position_intents_after_forward.assert_awaited_once_with(
+        order_id="close-1", delivered=True, symbol="BTC/USDC"
+    )
+
+
+async def test_resolution_is_none_without_a_working_strategy_hook() -> None:
+    """A failing/absent hook is not guessed into a state — None is returned instead."""
+    harness = trading_check_bot()
+    harness.trading_strategy.resolve_position_intents_after_forward = MagicMock(
+        side_effect=AttributeError("no hook")
+    )
+    harness.trading_strategy.position_intent_state = MagicMock(return_value="pending")
+
+    state = await harness.bot._resolve_position_intents(
+        SimpleNamespace(action="BUY", order_id="order-1"), True
+    )
+
+    assert state is None
+
+    strategy_without_resolver = MagicMock(spec=["position_intent_state"])
+    strategy_without_resolver.position_intent_state = MagicMock(return_value="pending")
+    harness.bot.trading_strategy = strategy_without_resolver
+
+    assert (
+        await harness.bot._resolve_position_intents(
+            SimpleNamespace(action="BUY", order_id="order-1"), True
+        )
+        == "pending"
+    )
+
+
+def test_execution_note_reports_a_pending_command_as_not_confirmed() -> None:
+    """The card must say the command is unconfirmed instead of showing an execution."""
+    harness = trading_check_bot()
+    result = {"analysis": {"signal": "CLOSE"}}
+    decision = SimpleNamespace(action="CLOSE", order_id="close-1")
+
+    pending_note = harness.bot._build_execution_note(
+        result, decision, False, None, intent_state="pending"
+    )
+    unknown_note = harness.bot._build_execution_note(
+        result, decision, False, None, intent_state="unknown"
+    )
+    confirmed_note = harness.bot._build_execution_note(
+        result, decision, False, None, intent_state="confirmed"
+    )
+    missing_note = harness.bot._build_execution_note(result, decision, False, None)
+
+    assert pending_note is not None and "UNCONFIRMED" in pending_note
+    assert unknown_note is not None and "UNCONFIRMED" in unknown_note
+    assert "local state" in pending_note.lower() or "do NOT count" in pending_note
+    assert confirmed_note is None, "a confirmed command is an execution — no disclaimer"
+    assert missing_note is None, "no intent layer (test double) keeps the legacy behaviour"

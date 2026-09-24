@@ -7,7 +7,9 @@ values in src/config/loader.py, so a test only states what it changes.
 
 from __future__ import annotations
 
+import tempfile
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -94,6 +96,10 @@ def make_config(**overrides: Any) -> SimpleNamespace:
     """Config double carrying the production defaults plus explicit overrides."""
     values = dict(PRODUCTION_DEFAULTS)
     values.update(overrides)
+    values.setdefault(
+        "BOT_INTENT_JOURNAL_PATH",
+        str(Path(tempfile.mkdtemp(prefix="llm_trader_test_intents_")) / "bot_position_intents.jsonl"),
+    )
     timeframe = values["TIMEFRAME"]
     values.setdefault("STOP_LOSS_CHECK_INTERVAL", timeframe)
     values.setdefault("TAKE_PROFIT_CHECK_INTERVAL", timeframe)
@@ -139,6 +145,7 @@ def mock_persistence() -> MagicMock:
     writes). The sync counterparts stay ``MagicMock``.
     """
     persistence = MagicMock()
+    persistence.data_dir = tempfile.mkdtemp(prefix="llm_trader_test_data_")
     persistence.async_save_trade_decision = AsyncMock()
     persistence.async_save_position = AsyncMock()
     persistence.save_position = MagicMock()

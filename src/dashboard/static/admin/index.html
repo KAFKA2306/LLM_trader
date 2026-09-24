@@ -11,11 +11,10 @@
     <link
         href="https://fonts.googleapis.com/css2?family=Exo+2:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap"
         rel="stylesheet">
-    <link rel="stylesheet" href="admin.css?v=1">
+    <link rel="stylesheet" href="admin.css?v=2">
 </head>
 
 <body>
-    <!-- ═══ LOGIN SCREEN ═══ -->
     <div id="login-screen" class="login-screen">
         <div class="login-card">
             <div class="login-brand">
@@ -39,9 +38,7 @@
         </div>
     </div>
 
-    <!-- ═══ MAIN APP ═══ -->
     <div id="app" class="admin-shell hidden">
-        <!-- Sidebar -->
         <aside class="admin-sidebar">
             <div class="sidebar-header">
                 <h1>ADMIN <span class="highlight">CONSOLE</span></h1>
@@ -58,7 +55,6 @@
             </div>
         </aside>
 
-        <!-- Content Area -->
         <main class="admin-main">
             <div id="page-dashboard" class="page">
                 <h2 class="page-title">Dashboard</h2>
@@ -76,7 +72,6 @@
                         <p class="stat-value" id="stat-subscribers">--</p>
                     </div>
                 </div>
-                <!-- Quick Actions -->
                 <div class="card">
                     <h3 class="card-title">Quick Actions</h3>
                     <div class="action-row">
@@ -84,7 +79,6 @@
                         <button id="btn-toggle-feed" class="btn btn-warning">📡 Toggle Feed</button>
                     </div>
                 </div>
-                <!-- Human Input -->
                 <div class="card">
                     <h3 class="card-title">Human-in-the-Loop Input</h3>
                     <p class="card-hint">Type an iteration goal or execution target for the bot. It will be consumed on
@@ -120,7 +114,6 @@
                         </button>
                     </div>
                 </div>
-                <!-- Console Status -->
                 <div class="card">
                     <h3 class="card-title">Console Connection</h3>
                     <div class="status-row">
@@ -160,22 +153,19 @@
         </main>
     </div>
 
-    <!-- Toast Container -->
     <div id="toast-container" class="toast-container"></div>
 
     <script>
         (function () {
             'use strict';
 
-            // ─── State ────────────────────────────────────────────────────
-            let authToken = null;          // in-memory WS/bearer token; never persisted
+            let authToken = null;          
             let consoleWs = null;
             let logWs = null;
             let currentPage = 'dashboard';
             let statusPollTimer = null;
-            let sessionActive = false;     // gates WS auto-reconnect to live sessions
+            let sessionActive = false;     
 
-            // ─── Helpers ──────────────────────────────────────────────────
             function $(sel) { return document.querySelector(sel); }
             function $$(sel) { return document.querySelectorAll(sel); }
 
@@ -227,7 +217,6 @@
                 el.classList.remove('hidden');
             }
 
-            // ─── Auth ─────────────────────────────────────────────────────
             async function login(username, password) {
                 const btn = $('#login-form button[type="submit"]');
                 if (btn) btn.disabled = true;
@@ -266,7 +255,6 @@
                 $('#login-screen').classList.remove('hidden');
             }
 
-            // ─── App Init ─────────────────────────────────────────────────
             function showApp(username) {
                 sessionActive = true;
                 $('#login-screen').classList.add('hidden');
@@ -280,7 +268,6 @@
                 loadConfig();
             }
 
-            // ─── Navigation ───────────────────────────────────────────────
             function navigateTo(page) {
                 currentPage = page;
                 $$('.page').forEach(el => el.classList.add('hidden'));
@@ -291,7 +278,6 @@
                 });
             }
 
-            // ─── WebSocket: Console ───────────────────────────────────────
             function connectConsoleWs() {
                 if (!sessionActive || !authToken) return;
                 if (consoleWs) consoleWs.close();
@@ -355,7 +341,6 @@
                 consoleWs.send(JSON.stringify({ action, ...extra }));
             }
 
-            // ─── WebSocket: Logs ──────────────────────────────────────────
             function connectLogWs() {
                 if (!sessionActive || !authToken) return;
                 if (logWs) logWs.close();
@@ -377,7 +362,6 @@
                 logWs.onerror = () => { };
             }
 
-            // Log level hierarchy: higher rank = more severe.
             const LOG_RANK = { ERROR: 4, WARNING: 3, INFO: 2, DEBUG: 1, OTHER: 0 };
 
             function lineLevel(line) {
@@ -422,7 +406,6 @@
                 });
             }
 
-            // ─── Status Polling ───────────────────────────────────────────
             async function pollStatus() {
                 try {
                     const data = await api('GET', '/system/status');
@@ -432,7 +415,6 @@
                 } catch { }
             }
 
-            // ─── Config Editor ────────────────────────────────────────────
             async function loadConfig() {
                 try {
                     renderConfig(await api('GET', '/config'));
@@ -539,7 +521,7 @@
                     input.oninput = () => valSpan.textContent = input.value;
                     inputCol.appendChild(input);
                     inputCol.appendChild(valSpan);
-                    input = null; // already appended
+                    input = null; 
                 } else {
                     input = document.createElement('input');
                     input.type = (meta.type === 'int' || meta.type === 'float') ? 'number' : 'text';
@@ -572,7 +554,6 @@
                 return wrap;
             }
 
-            // ─── Event Bindings ───────────────────────────────────────────
             function init() {
                 $('#login-form').onsubmit = (e) => {
                     e.preventDefault();
@@ -606,9 +587,6 @@
                 $('#log-filter').onchange = applyLogFilter;
                 $('#log-clear').onclick = () => { $('#log-container').innerHTML = ''; };
 
-                // Restore an existing session through the httponly cookie. The
-                // bearer/WS token is requested fresh and kept in memory only — never
-                // persisted to localStorage (avoids XSS token-theft persistence).
                 fetch('/api/admin/ws-token', { credentials: 'same-origin' })
                     .then(r => r.ok ? r.json() : null)
                     .then(data => {

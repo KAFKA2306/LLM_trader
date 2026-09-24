@@ -13,6 +13,10 @@ from .brain_experience import BrainExperienceRecorder
 from .brain_patterns import TradePatternAnalyzer
 from .brain_reflection import BrainReflectionEngine
 from .data_models import ExitExecutionContext, MarketSnapshot, Position, TradeDecision
+from .executor_reconciliation import (
+    LESSON_SKIPPED_NO_EVIDENCE,
+    exit_evidence_is_learnable,
+)
 from .stop_loss_tightening_policy import StopLossTighteningPolicy, TighteningEvaluation
 from .vector_memory import VectorMemoryService
 
@@ -110,8 +114,28 @@ class TradingBrainService:
         close_reason: str,
         market_conditions: "MarketConditions",
         entry_decision: TradeDecision | None = None,
-    ) -> None:
-        """Extract insights from a closed trade and update brain."""
+        evidence: Any | None = None,
+    ) -> bool:
+        """Extract insights from a closed trade and update brain.
+
+        Wave-5 guard (defence in depth — the close path applies the same rule): the
+        brain may only learn from a close whose EXIT FACT is proven. ``evidence`` is an
+        :class:`~src.trading.executor_reconciliation.ExitEvidence` carrying the real fill
+        price and amount, the source the fact came from and a stable event id. Anything
+        else — no evidence, an unknown price or amount, a non-confirming source, a close
+        that was booked as UNKNOWN — is REFUSED here: the lesson is skipped explicitly
+        and NOTHING is written that could pass for an analysis.
+
+        Returns:
+            True when the experience was recorded, False when it was refused.
+        """
+        learnable, reason = exit_evidence_is_learnable(evidence)
+        if not learnable:
+            self.logger.warning(
+                "%s (%s) | %s %s",
+                LESSON_SKIPPED_NO_EVIDENCE, reason, position.symbol, close_reason,
+            )
+            return False
         self.context_provider.clear_stats_cache()
         self.experience_recorder.record_closed_trade(
             position=position,
@@ -125,6 +149,7 @@ class TradingBrainService:
             self.trigger_reflection()
             self.trigger_loss_reflection()
             self.trigger_ai_mistake_reflection()
+        return True
 
     def get_context(self, snapshot: MarketSnapshot) -> str:
         """Generate formatted brain context for prompt injection using vector retrieval."""

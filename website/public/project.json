@@ -54,7 +54,7 @@
       "expected-value gate: EV computed from the bot's own closed-trade history; a negative EV signal is rejected deterministically, overriding the model",
       "separate executor service: CCXT order placement, leverage and exchange-side stops behind a seven-check safety guard, with a JSONL verdict journal",
       "free news and sentiment: RSS (CoinDesk, CoinTelegraph, Decrypt, CryptoSlate), Reddit Atom feeds, CoinGecko, DeFiLlama, Alternative.me Fear & Greed",
-      "eight-agent development system under .ai/ (supervisor plus seven specialists)"
+      "layered agent documentation: a root AGENTS.md plus a per-package AGENTS.md file, so a model reads only the area it touches"
     ],
     "stack": [
       "Python 3.13",

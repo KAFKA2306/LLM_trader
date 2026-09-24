@@ -396,7 +396,7 @@ class Config:
 
     @property
     def DASHBOARD_HOST(self):
-        return self.get_config("dashboard", "host", "0.0.0.0")  # nosec B104
+        return self.get_config("dashboard", "host", "0.0.0.0")
 
     @property
     def DASHBOARD_PORT(self):
@@ -697,6 +697,19 @@ class Config:
         """
         return self.get_config(
             "executor_api", "verdict_path", "data/trading/executor_verdicts.jsonl"
+        )
+
+    @property
+    def EXECUTOR_EXIT_PATH(self) -> str:
+        """Filesystem path of the executor's exit journal (JSONL).
+
+        The executor appends one line whenever a tracked position exits ON THE
+        EXCHANGE (a stop-loss or take-profit order filled while the bot was
+        between cycles). The bot reads it to book the CLOSE with the real fill
+        price instead of keeping the entry open forever.
+        """
+        return self.get_config(
+            "executor_api", "exit_path", "data/trading/executor_exits.jsonl"
         )
 
     @property

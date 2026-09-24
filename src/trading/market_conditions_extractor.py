@@ -25,6 +25,23 @@ from .data_models import MarketConditions, Position
 if TYPE_CHECKING:
     from src.logger.logger import Logger
 
+ALIGNMENT_VALUES = frozenset({"ALIGNED", "MIXED", "DIVERGENT"})
+
+
+def normalize_alignment(raw: Any) -> str | None:
+    """Keep only the contract's alignment vocabulary, else None.
+
+    Alignment answers "do the 4h and daily timeframes AGREE?" (ALIGNED / MIXED /
+    DIVERGENT) — it is NOT a trend direction. The learning services bucket
+    alignment by exactly these three values, so an out-of-vocabulary label
+    ("BEARISH") would look like data while being ignored by every consumer.
+    Unknown input becomes None: "not stated" instead of plausible garbage.
+    """
+    if not isinstance(raw, str):
+        return None
+    value = raw.strip().upper()
+    return value if value in ALIGNMENT_VALUES else None
+
 
 class MarketConditionsExtractor:
     """Extracts market conditions, confluence factors, and prices from analysis results."""
@@ -61,7 +78,7 @@ class MarketConditionsExtractor:
                 except (TypeError, ValueError):
                     strength_float = 50.0
                 conditions["trend_strength"] = strength_float
-                conditions["timeframe_alignment"] = trend.get("timeframe_alignment")
+                conditions["timeframe_alignment"] = normalize_alignment(trend.get("timeframe_alignment"))
 
             tech_data = result.get("technical_data", {})
             if tech_data:

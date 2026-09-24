@@ -1,4 +1,3 @@
-/* global ApexCharts */
 let chart;
 
 export function initPerformanceChart() {
@@ -74,7 +73,6 @@ export function initPerformanceChart() {
             theme: 'dark',
             x: { format: 'dd MMM yyyy HH:mm' },
             custom: function({series, seriesIndex, dataPointIndex, w}) {
-                // robustness check
                 if (!w.config.series[seriesIndex] || !w.config.series[seriesIndex].data[dataPointIndex]) {
                     return '';
                 }
@@ -89,10 +87,8 @@ export function initPerformanceChart() {
                 }).format(date);
 
                 let actionHtml = '';
-                // Check if extra data exists and has an action
                 if (data.extra && data.extra.action) {
                     const action = data.extra.action;
-                    // Security: Escape action text to prevent XSS
                     const safeAction = escapeHtml(action);
                     let color = '#8b949e';
                     if (action === 'BUY') color = '#238636';
@@ -147,7 +143,6 @@ export async function updatePerformanceData() {
     if (!chart) return;
     
     try {
-        // Fetch history for chart
         const historyResponse = await fetch('/api/performance/history');
         const historyData = await historyResponse.json();
         
@@ -163,7 +158,6 @@ export async function updatePerformanceData() {
                     extra: point
                 });
                 
-                // Add trade markers
                 if (point.action) {
                     const action = point.action;
                     const isBuy = action === 'BUY';
@@ -172,22 +166,21 @@ export async function updatePerformanceData() {
                     const isCloseShort = action === 'CLOSE_SHORT';
                     const isGenericClose = action.includes('CLOSE') && !isCloseLong && !isCloseShort;
 
-                    // Only add markers for trade entry/exit actions
                     if (isBuy || isSell || isCloseLong || isCloseShort || isGenericClose) {
                         let color = '#8b949e';
                         let symbol = 'circle';
                         let markerSize = 6;
 
                         if (isBuy) {
-                            color = '#00ff9d'; // Vibrant entry green
-                            symbol = 'rect'; // Triangle effectively via shape
+                            color = '#00ff9d'; 
+                            symbol = 'rect'; 
                             markerSize = 8;
                         } else if (isSell) {
-                            color = '#1f6feb'; // Entry blue
+                            color = '#1f6feb'; 
                             symbol = 'rect';
                             markerSize = 8;
                         } else {
-                            color = '#f85149'; // Exit red
+                            color = '#f85149'; 
                             symbol = 'circle';
                             markerSize = 5;
                         }
@@ -203,7 +196,7 @@ export async function updatePerformanceData() {
                                 shape: symbol === 'rect' ? 'square' : 'circle' 
                             },
                             label: {
-                                text: '', // Removing bulky text labels
+                                text: '', 
                                 borderWidth: 0,
                                 style: { background: 'transparent' }
                             }
@@ -214,7 +207,6 @@ export async function updatePerformanceData() {
         }
         
         if (seriesData.length > 0) {
-            // FORCE full replace of series to ensure name and data are tied
             chart.updateSeries([{ 
                 name: 'Account Value',
                 data: seriesData 
@@ -224,7 +216,6 @@ export async function updatePerformanceData() {
             }
         }
         
-        // Fetch stats separately
         const statsResponse = await fetch('/api/performance/stats');
         const stats = await statsResponse.json();
         
@@ -246,14 +237,8 @@ export async function updatePerformanceData() {
     }
 }
 
-// Expose refresh function specifically for fullscreen toggle or resize events
 window.refreshPerformanceAnnotations = updatePerformanceData;
 
-/**
- * Escapes HTML characters to prevent XSS.
- * @param {string} text - The text to escape.
- * @returns {string} - The escaped text.
- */
 function escapeHtml(text) {
     if (!text) return '';
     return String(text)

@@ -37,6 +37,7 @@ ENV/
 .claude/
 # Testing
 .pytest_cache/
+.pytest_temp/
 .coverage
 *.future
 htmlcov/
@@ -60,7 +61,5 @@ website/dist/
 .tmp.driveupload/
 *.tmp
 
-# AI-generated temporary plans (never committed)
-.ai/plans/
 .hermes.md
 

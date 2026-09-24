@@ -14,7 +14,7 @@ import re
 try:
     import defusedxml.ElementTree as ET
 except ImportError:
-    import xml.etree.ElementTree as ET  # nosec B405, B314
+    import xml.etree.ElementTree as ET
 import html as html_module
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -272,7 +272,7 @@ def parse_rss_items(
     """
     results: list[dict[str, Any]] = []
     try:
-        root = ET.fromstring(payload_text)  # nosec B314
+        root = ET.fromstring(payload_text)
     except (ET.ParseError, Exception):  # noqa: BLE001
         return results
 

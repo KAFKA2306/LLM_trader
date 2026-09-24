@@ -1,8 +1,3 @@
-/** Live Console panel — real-time log streaming with day-page history.
- *
- * Connects via WebSocket to /api/console/live for live updates.
- * Loads historical pages via REST /api/console/page/{n}.
- */
 
 let ws = null;
 let reconnectTimer = null;
@@ -16,7 +11,6 @@ const filter = () => document.getElementById('console-filter');
 const autoscroll = () => document.getElementById('console-autoscroll');
 const pageNav = () => document.getElementById('console-page-nav');
 
-// ─── Connection ──────────────────────────────────────────────────────
 
 function connect() {
     if (ws && ws.readyState === WebSocket.OPEN) return;
@@ -43,7 +37,7 @@ function connect() {
             if (msg.type === 'log') {
                 appendLine(msg.line);
             }
-        } catch (e) { /* ignore malformed */ }
+        } catch (e) {  }
     };
 
     ws.onclose = () => {
@@ -72,7 +66,6 @@ function updateBadge(cls, text) {
     el.textContent = text;
 }
 
-// ─── Rendering ───────────────────────────────────────────────────────
 
 function levelClass(line) {
     if (line.includes('[ERROR]') || line.includes('[CRITICAL]')) return 'lvl-error';
@@ -133,7 +126,6 @@ function applyFilter() {
     });
 }
 
-// ─── Page Navigation ─────────────────────────────────────────────────
 
 async function loadPages() {
     try {
@@ -198,7 +190,6 @@ async function switchPage(page) {
     }
 }
 
-// ─── Init ────────────────────────────────────────────────────────────
 
 export function initConsolePanel() {
     connect();
@@ -229,5 +220,4 @@ export function initConsolePanel() {
 }
 
 export function updateConsoleData() {
-    // No-op — console is push-based via WebSocket
 }

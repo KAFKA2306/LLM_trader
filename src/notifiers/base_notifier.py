@@ -7,14 +7,27 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
+from src.trading.data_models import ENTRY_SIGNALS, EXIT_SIGNALS, LONG_ENTRY_SIGNALS
+
 if TYPE_CHECKING:
     from src.config.loader import Config
     from src.parsing.unified_parser import UnifiedParser
     from src.utils.format_utils import FormatUtils
 
 
-ENTRY_ACTIONS = {"BUY", "SELL"}
-EXIT_ACTIONS = {"CLOSE", "CLOSE_LONG", "CLOSE_SHORT"}
+ENTRY_ACTIONS = ENTRY_SIGNALS
+EXIT_ACTIONS = EXIT_SIGNALS
+
+
+def format_commission(fee: float | None) -> str:
+    """Render a commission for operator-facing output without inventing a number.
+
+    ``None`` means UNKNOWN (no fill/order reported a fee for this trade). It must never
+    be printed as ``$0.0000`` and never as a configured rate.
+    """
+    if fee is None:
+        return "unknown (no fill/order fee data)"
+    return f"${fee:.4f}"
 
 
 class BaseNotifier(ABC):
@@ -74,18 +87,33 @@ class BaseNotifier(ABC):
             symbol: str,
             timeframe: str,
             channel_id: int,
-            chart_image: io.BytesIO | None = None
+            chart_image: io.BytesIO | None = None,
+            execution_note: str | None = None
     ) -> None:
-        """Send full analysis notification."""
+        """Send full analysis notification.
+
+        ``execution_note`` is optional and additively documented: implementations
+        that predate it must accept the keyword (wave-1 contract) and should mark the
+        card as a non-executed recommendation.
+        """
 
     @abstractmethod
     async def send_position_status(
             self,
             position: Any,
             current_price: float,
-            channel_id: int
+            channel_id: int,
+            *,
+            verification: str = "unverified",
+            verified_at: Any = None,
+            verification_detail: str | None = None
     ) -> None:
-        """Send current open position status."""
+        """Send current open position status.
+
+        ``verification`` is ``"executor_reported"`` only when a recent positive answer
+        from the EXECUTOR's tracker backs the card; anything else is ``"unverified"``.
+        No implementation may label a card exchange-verified.
+        """
 
     @abstractmethod
     async def send_performance_stats(
@@ -213,6 +241,7 @@ class BaseNotifier(ABC):
         total_pnl_quote = 0.0
         sum_trade_pnl_pct = 0.0
         total_fees = 0.0
+        fees_unknown_trades = 0
         closed_trades = 0
         winning_trades = 0
         open_position = None
@@ -229,17 +258,20 @@ class BaseNotifier(ABC):
                 open_price = open_position.get("price", 0)
                 open_quantity = open_position.get("quantity", 0.0)
 
-                if open_action == "BUY":
+                if open_action in LONG_ENTRY_SIGNALS:
                     pnl_pct = ((price - open_price) / open_price) * 100
                     pnl_quote = (price - open_price) * open_quantity
                 else:
                     pnl_pct = ((open_price - price) / open_price) * 100
                     pnl_quote = (open_price - price) * open_quantity
 
-                entry_fee = open_position.get("fee", 0.0)
-                exit_fee = decision_dict.get("fee", 0.0)
+                entry_fee = open_position.get("fee")
+                exit_fee = decision_dict.get("fee")
+                if entry_fee is None or exit_fee is None:
+                    fees_unknown_trades += 1
+                else:
+                    total_fees += entry_fee + exit_fee
 
-                total_fees += entry_fee + exit_fee
                 total_pnl_quote += pnl_quote
                 sum_trade_pnl_pct += pnl_pct
                 closed_trades += 1
@@ -268,6 +300,8 @@ class BaseNotifier(ABC):
             "total_pnl_quote": total_pnl_quote,
             "total_pnl_pct": total_pnl_pct,
             "total_fees": total_fees,
+            "fees_unknown_trades": fees_unknown_trades,
+            "fees_complete": fees_unknown_trades == 0,
             "closed_trades": closed_trades,
             "winning_trades": winning_trades,
             "avg_pnl_pct": sum_trade_pnl_pct / closed_trades,

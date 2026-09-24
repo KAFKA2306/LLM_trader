@@ -1,22 +1,13 @@
-/**
- * WebSocket client for real-time dashboard updates.
- */
 
 let ws = null;
 let reconnectAttempts = 0;
 const maxReconnectAttempts = 10;
 const reconnectDelay = 3000;
 
-/**
- * Initialize WebSocket connection.
- */
 export function initWebSocket() {
     connect();
 }
 
-/**
- * Connect to WebSocket server.
- */
 function connect() {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     ws = new WebSocket(`${protocol}//${location.host}/ws`);
@@ -42,9 +33,6 @@ function connect() {
     };
 }
 
-/**
- * Schedule a reconnection attempt.
- */
 function scheduleReconnect() {
     if (reconnectAttempts >= maxReconnectAttempts) {
         console.warn('Max WebSocket reconnection attempts reached');
@@ -55,9 +43,6 @@ function scheduleReconnect() {
     setTimeout(connect, delay);
 }
 
-/**
- * Handle incoming WebSocket updates.
- */
 function handleUpdate(data) {
     switch (data.type) {
         case 'countdown':
@@ -82,26 +67,17 @@ function handleUpdate(data) {
     }
 }
 
-/**
- * Update countdown display from WebSocket data.
- */
 function updateCountdownFromWS(data) {
     if (data.next_check_utc) {
         window._nextCheckUTC = new Date(data.next_check_utc);
     }
 }
 
-/**
- * Update position from WebSocket data.
- */
 function updatePositionFromWS(data) {
     const event = new CustomEvent('position-update', { detail: data.data });
     document.dispatchEvent(event);
 }
 
-/**
- * Trigger a full refresh of all panels.
- */
 function triggerRefreshAll() {
     const event = new CustomEvent('analysis-complete');
     document.dispatchEvent(event);
@@ -117,9 +93,6 @@ function dispatchBrainStateUpdated(data) {
     document.dispatchEvent(event);
 }
 
-/**
- * Update connection status indicator.
- */
 function updateConnectionStatus(status) {
     const indicator = document.getElementById('connection-status');
     const statusDot = document.querySelector('.status-dot');
@@ -146,9 +119,6 @@ function updateConnectionStatus(status) {
     }
 }
 
-/**
- * Format duration to human-readable string (e.g., "2h 35m").
- */
 export function formatDuration(seconds) {
     if (seconds < 0) seconds = 0;
     const hours = Math.floor(seconds / 3600);
@@ -159,17 +129,11 @@ export function formatDuration(seconds) {
     return `${secs}s`;
 }
 
-/**
- * Start countdown timer loop.
- */
 export function startCountdownLoop() {
     fetchInitialCountdown();
     setInterval(updateCountdownDisplay, 1000);
 }
 
-/**
- * Fetch initial countdown from REST API.
- */
 async function fetchInitialCountdown() {
     try {
         const response = await fetch('/api/status/countdown');
@@ -182,9 +146,6 @@ async function fetchInitialCountdown() {
     }
 }
 
-/**
- * Update countdown display every second.
- */
 function updateCountdownDisplay() {
     const element = document.getElementById('next-analysis');
     if (!element) return;

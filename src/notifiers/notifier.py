@@ -5,17 +5,34 @@ Sends AI trading analysis to Discord with automatic message cleanup.
 import asyncio
 import io
 from collections.abc import Awaitable, Callable
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 import discord
 from aiohttp import ClientSession
 
+from src.trading.data_models import ENTRY_SIGNALS
+from src.trading.executor_reconciliation import (
+    VERIFICATION_EXCHANGE_VERIFIED,
+    VERIFICATION_EXECUTOR_REPORTED,
+    VERIFICATION_UNVERIFIED,
+)
 from src.utils.decorators import retry_async
 
-from .base_notifier import BaseNotifier
+from .base_notifier import BaseNotifier, format_commission
 from .filehandler import DiscordFileHandler
 
-ENTRY_ACTIONS = {"BUY", "SELL"}
+NOT_EXECUTED_PREFIX = "🚫 RECOMMENDATION NOT EXECUTED"
+
+
+def format_utc_stamp(moment: datetime | None) -> str:
+    """Format a UTC timestamp for operator-facing embeds."""
+    if moment is None:
+        return "unknown"
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
 
 if TYPE_CHECKING:
     from src.config.loader import Config
@@ -310,9 +327,12 @@ class DiscordNotifier(BaseNotifier):
                 embed.add_field(name="Invested", value=f"${decision.quote_amount:,.2f}", inline=True)
             if decision.quantity:
                 embed.add_field(name="Quantity", value=self.formatter.fmt(decision.quantity), inline=True)
-            if decision.action in ENTRY_ACTIONS and decision.quantity:
-                entry_fee = decision.price * decision.quantity * self.config.TRANSACTION_FEE_PERCENT
-                embed.add_field(name="Entry Fee", value=f"${entry_fee:.4f}", inline=True)
+            if decision.action in ENTRY_SIGNALS and decision.quantity:
+                embed.add_field(
+                    name="Entry Fee",
+                    value=format_commission(decision.fee),
+                    inline=True,
+                )
 
             embed.set_footer(text=f"Time: {decision.timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
             await self._send_embed(embed, channel_id)
@@ -326,9 +346,16 @@ class DiscordNotifier(BaseNotifier):
             symbol: str,
             timeframe: str,
             channel_id: int,
-            chart_image: io.BytesIO | None = None
+            chart_image: io.BytesIO | None = None,
+            execution_note: str | None = None
     ) -> None:
-        """Send full analysis notification with reasoning and JSON embed."""
+        """Send full analysis notification with reasoning and JSON embed.
+
+        ``execution_note`` is set when the recommendation was NOT executed (the
+        strategy skipped it, the position changed during the analysis, or the
+        exchange state was unverified). The card then says so explicitly instead of
+        showing a bare signal that reads as a performed action.
+        """
         try:
             analysis = result.get("analysis")
             if not analysis:
@@ -337,13 +364,21 @@ class DiscordNotifier(BaseNotifier):
             raw_response = result.get("raw_response", "")
             reasoning = self.unified_parser.extract_text_before_json(raw_response) if raw_response else ""
 
+            if execution_note:
+                await self.send_message(  # type: ignore
+                    message=f"**{symbol} Analysis**\n\n{NOT_EXECUTED_PREFIX}\n{execution_note}",
+                    channel_id=channel_id
+                )
+
             if reasoning:
                 await self.send_message(  # type: ignore
                     message=f"**{symbol} Analysis**\n\n{reasoning}",
                     channel_id=channel_id
                 )
 
-            embed = self._create_analysis_embed(analysis, symbol, timeframe)
+            embed = self._create_analysis_embed(
+                analysis, symbol, timeframe, execution_note=execution_note
+            )
             if embed:
                 await self._send_embed(embed, channel_id)
 
@@ -411,20 +446,60 @@ class DiscordNotifier(BaseNotifier):
             self,
             position: Any,
             current_price: float,
-            channel_id: int
+            channel_id: int,
+            *,
+            verification: str = VERIFICATION_UNVERIFIED,
+            verified_at: datetime | None = None,
+            verification_detail: str | None = None,
     ) -> None:
-        """Send current open position status embed."""
+        """Send current open position status embed.
+
+        ``verification`` states whether the executor supplied venue-backed proof,
+        tracker-only evidence, or no reliable answer.
+        """
         try:
             pnl_pct, pnl_quote = self.calculate_position_pnl(position, current_price)
             stop_distance_pct, target_distance_pct = self.calculate_stop_target_distances(position, current_price)
             hours_held = self.calculate_time_held(position.entry_time)
 
             color_key, emoji = self.get_pnl_styling(pnl_pct)
-            color = self._get_discord_color(color_key)
+            verified = verification == VERIFICATION_EXCHANGE_VERIFIED
+            unverified = verification not in {
+                VERIFICATION_EXECUTOR_REPORTED,
+                VERIFICATION_EXCHANGE_VERIFIED,
+            }
+            color = self._get_discord_color("orange" if unverified else color_key)
+
+            if verified:
+                title = f"{emoji} Open {position.direction} Position - {position.symbol}"
+                description = "The exchange confirms this position and its protection are active."
+                state_field = f"✅ Exchange-verified {format_utc_stamp(verified_at)} — protection active"
+            elif unverified:
+                title = f"⚠️ Position Status UNVERIFIED - {position.symbol}"
+                description = (
+                    "The exchange state is UNVERIFIED — this card is NOT proof of an open "
+                    "position. Last confirmation: "
+                    f"{format_utc_stamp(verified_at)}."
+                    + (f" Reason: {verification_detail}." if verification_detail else "")
+                )
+                state_field = (
+                    f"❓ UNVERIFIED (executor tracker only) — last confirmation: "
+                    f"{format_utc_stamp(verified_at)}"
+                )
+            else:
+                title = f"{emoji} Open {position.direction} Position (executor-reported) - {position.symbol}"
+                description = (
+                    "Executor tracker reports this position open. NOT exchange-verified "
+                    "(no venue revision/timestamp)."
+                )
+                state_field = (
+                    f"⚠️ executor-reported {format_utc_stamp(verified_at)} — "
+                    f"NOT exchange-verified"
+                )
 
             embed = discord.Embed(
-                title=f"{emoji} Open {position.direction} Position - {position.symbol}",
-                description="Current position monitoring",
+                title=title,
+                description=description,
                 color=color
             )
 
@@ -444,7 +519,8 @@ class DiscordNotifier(BaseNotifier):
             embed.add_field(name="Stop Loss", value=f"${position.stop_loss:,.2f} ({stop_distance_pct:+.2f}%)", inline=True)
             embed.add_field(name="Take Profit", value=f"${position.take_profit:,.2f} ({target_distance_pct:+.2f}%)", inline=True)
             embed.add_field(name="Exit Monitoring", value=self.format_exit_monitoring(), inline=False)
-            embed.add_field(name="Entry Fee", value=f"${position.entry_fee:.4f}", inline=True)
+            embed.add_field(name="Position State", value=state_field, inline=False)
+            embed.add_field(name="Entry Fee", value=format_commission(position.entry_fee), inline=True)
             embed.add_field(name="Time Held", value=f"{hours_held:.1f}h", inline=True)
             embed.set_footer(text=f"Entry Time: {position.entry_time.strftime('%Y-%m-%d %H:%M:%S')}")
             await self._send_embed(embed, channel_id)
@@ -475,7 +551,10 @@ class DiscordNotifier(BaseNotifier):
             embed.add_field(name="Avg P&L/Trade", value=f"{stats['avg_pnl_pct']:+.2f}%", inline=True)
             embed.add_field(name="Win Rate", value=f"{stats['win_rate']:.1f}% ({stats['winning_trades']}/{stats['closed_trades']})", inline=True)
             embed.add_field(name="Total Trades", value=str(stats["closed_trades"]), inline=True)
-            embed.add_field(name="Total Fees", value=f"${stats['total_fees']:.4f}", inline=True)
+            total_fees_value = format_commission(stats["total_fees"])
+            if not stats.get("fees_complete", True):
+                total_fees_value += f" (+{stats['fees_unknown_trades']} trade(s) without fee data)"
+            embed.add_field(name="Total Fees", value=total_fees_value, inline=True)
             embed.add_field(name=f"Net P&L ({self.config.QUOTE_CURRENCY})", value=f"${stats['net_pnl']:+,.2f}", inline=True)
 
             last_closed_trade = stats.get("last_closed_trade")
@@ -495,18 +574,38 @@ class DiscordNotifier(BaseNotifier):
         except Exception as e:  # noqa: BLE001
             self.logger.error("Error sending performance stats: %s", e)
 
-    def _create_analysis_embed(self, analysis: dict, symbol: str, timeframe: str) -> discord.Embed | None:
-        """Create Discord embed from analysis JSON."""
+    def _create_analysis_embed(
+        self, analysis: dict, symbol: str, timeframe: str, execution_note: str | None = None
+    ) -> discord.Embed | None:
+        """Create Discord embed from analysis JSON.
+
+        ``execution_note`` marks a recommendation that was NOT executed: the title and
+        an explicit field say so, because a bare ``UPDATE``/``BUY`` title reads as a
+        performed action (the 2026-09-21 incident cards).
+        """
         try:
             fields = self.extract_analysis_fields(analysis)
             color_key, _ = self.get_action_styling(fields["signal"])
             color = self._get_discord_color(color_key)
 
+            title = f"📊 {symbol} - {fields['signal']}"
+            description = fields["reasoning"][:4096]
+            if execution_note:
+                title = f"{NOT_EXECUTED_PREFIX}: {symbol} - {fields['signal']}"
+                description = f"**{NOT_EXECUTED_PREFIX}**\n{description}"
+
             embed = discord.Embed(
-                title=f"📊 {symbol} - {fields['signal']}",
-                description=fields["reasoning"][:4096],
+                title=title,
+                description=description,
                 color=color
             )
+
+            if execution_note:
+                embed.add_field(
+                    name=NOT_EXECUTED_PREFIX,
+                    value=execution_note[:1024],
+                    inline=False,
+                )
 
             if fields["entry_price"]:
                 embed.add_field(name="Entry", value=f"${fields['entry_price']:,.2f}", inline=True)

@@ -5,7 +5,6 @@
     padding-bottom: 28px;
 }
 
-/* Sidebar */
 #sidebar {
     width: var(--sidebar-width);
     background-color: var(--bg-dark-1);
@@ -169,7 +168,6 @@
     font-family: var(--font-mono);
 }
 
-/* Main Content */
 #content-area {
     flex: 1;
     background: radial-gradient(circle at top right, #131820 0%, var(--bg-dark-0) 40%);
@@ -189,7 +187,6 @@
     z-index: 0;
 }
 
-/* Mobile Header - hidden on desktop */
 #mobile-header {
     display: none;
 }
@@ -224,8 +221,6 @@
     letter-spacing: 0.5px;
 }
 
-/* Contact Info in Sidebar */
-/* ── Donation Block ── */
 .donation-block {
     margin-top: 12px;
     padding: 8px 8px;
@@ -313,7 +308,6 @@
     text-align: center;
 }
 
-/* ── Bottom Supporter Banner ── */
 .supporter-banner {
     position: fixed;
     bottom: 0;
@@ -355,7 +349,6 @@
     text-decoration: underline;
 }
 
-/* Buy Me a Coffee button */
 .bmc-btn {
     display: flex;
     align-items: center;
@@ -377,7 +370,6 @@
     box-shadow: 0 2px 6px rgba(255, 221, 0, 0.3);
 }
 
-/* AdSense placeholder */
 .adsense-placeholder {
     margin: 6px 0;
     padding: 14px 6px;
@@ -406,7 +398,6 @@
     font-style: italic;
 }
 
-/* Copy-to-clipboard inline button */
 .btn-copy-inline {
     background: none;
     border: 1px solid rgba(255, 255, 255, 0.1);

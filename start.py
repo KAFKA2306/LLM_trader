@@ -248,10 +248,9 @@ class CompositionRoot(ProvisioningMixin):
 
             progress.update(
                 task,
-                description="[cyan]Stage 8/9 — Notification channels (Discord) & maintenance...",
+                description="[cyan]Stage 8/9 — Notification channels (Discord)...",
             )
             notifiers = await self._provision_notifiers(utils)
-            await self._run_maintenance_tasks(trading["brain_service"])
             progress.update(task, completed=8)
 
             progress.update(
@@ -332,6 +331,16 @@ class CompositionRoot(ProvisioningMixin):
         force_analysis_event = dependencies.pop("force_analysis_event", None)
 
         def _create_position_monitor(bot: CryptoTradingBot) -> PositionStatusMonitor:
+            reconcile_interval_seconds = 120.0
+            get_config = getattr(self.config, "get_config", None)
+            if callable(get_config):
+                try:
+                    reconcile_interval_seconds = float(
+                        get_config("executor_api", "reconcile_interval_seconds", 120.0)
+                    )
+                except (TypeError, ValueError):
+                    reconcile_interval_seconds = 120.0
+
             return PositionStatusMonitor(
                 logger=self.logger,
                 config=self.config,
@@ -344,6 +353,9 @@ class CompositionRoot(ProvisioningMixin):
                 fetch_current_ticker=bot.fetch_current_ticker,
                 interruptible_sleep=bot.interruptible_sleep,
                 get_symbol=lambda: bot.current_symbol,
+                manages_exits=lambda: not self.config.EXECUTOR_API_ENABLED,
+                reconcile_position=dependencies["trading_strategy"].reconcile_local_position,
+                reconcile_interval_seconds=reconcile_interval_seconds,
             )
 
         bot = CryptoTradingBot(

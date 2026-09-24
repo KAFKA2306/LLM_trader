@@ -1,9 +1,3 @@
-/**
- * Fullscreen panel module - Opens panels in modal overlay.
- * 
- * For canvas-based charts (ApexCharts, vis-network), we MOVE the original
- * element to the fullscreen container instead of cloning, then move it back on close.
- */
 
 let currentPanel = null;
 let originalParent = null;
@@ -122,7 +116,6 @@ export function openFullscreen(panelId) {
     modal.classList.add('active');
     document.body.style.overflow = 'hidden';
 
-    // Trap focus and hide background
     const appContainer = document.getElementById('app-container');
     if (appContainer) appContainer.setAttribute('aria-hidden', 'true');
 
@@ -157,7 +150,6 @@ function resizeContent(panelId, contentEl) {
                 }
             }, false, true);
             setTimeout(() => {
-                // NEW: Re-apply annotations at larger scale
                 if (typeof window.refreshPerformanceAnnotations === 'function') {
                     window.refreshPerformanceAnnotations();
                 }
@@ -223,7 +215,6 @@ function restoreContent(panelId, contentEl) {
                     }
                 }, true, true);
                 window.dispatchEvent(new Event('resize'));
-                // NEW: Restore annotations to original scale
                 if (typeof window.refreshPerformanceAnnotations === 'function') {
                     window.refreshPerformanceAnnotations();
                 }

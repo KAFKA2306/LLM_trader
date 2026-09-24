@@ -1,9 +1,5 @@
-/* Admin Console styles — reuses the main dashboard design tokens.
-   base.css provides :root variables, scrollbar, focus-visible, skip-link,
-   and reduced-motion rules shared with the main Semantic Signal dashboard. */
 @import url('../css/base.css');
 
-/* ─── Generic helpers ─────────────────────────────────────────────── */
 .hidden {
     display: none !important;
 }
@@ -16,7 +12,6 @@ button {
     font-family: inherit;
 }
 
-/* ─── Login screen ────────────────────────────────────────────────── */
 .login-screen {
     display: flex;
     align-items: center;
@@ -105,7 +100,6 @@ button {
     margin-bottom: 14px;
 }
 
-/* ─── Buttons ─────────────────────────────────────────────────────── */
 .btn {
     border: 1px solid transparent;
     border-radius: 8px;
@@ -166,7 +160,6 @@ button {
     font-size: 12px;
 }
 
-/* ─── App shell ───────────────────────────────────────────────────── */
 .admin-shell {
     display: flex;
     height: 100vh;
@@ -290,7 +283,6 @@ button {
     color: var(--text-main);
 }
 
-/* ─── Cards ───────────────────────────────────────────────────────── */
 .card {
     background: var(--bg-dark-1);
     border: 1px solid var(--border-subtle);
@@ -311,7 +303,6 @@ button {
     margin: 0 0 14px;
 }
 
-/* ─── Stat grid ───────────────────────────────────────────────────── */
 .stat-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -348,7 +339,6 @@ button {
     color: var(--accent-danger);
 }
 
-/* ─── Action rows ─────────────────────────────────────────────────── */
 .action-row {
     display: flex;
     flex-wrap: wrap;
@@ -370,7 +360,6 @@ button {
     color: var(--text-muted);
 }
 
-/* ─── Command grid (control panel) ────────────────────────────────── */
 .command-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
@@ -413,7 +402,6 @@ button {
     margin: 2px 0 0;
 }
 
-/* ─── Connection status ───────────────────────────────────────────── */
 .status-row {
     display: flex;
     align-items: center;
@@ -454,7 +442,6 @@ button {
     word-break: break-word;
 }
 
-/* Log level colors */
 .lvl-error {
     color: var(--accent-danger);
 }
@@ -479,7 +466,6 @@ button {
     color: var(--accent-success);
 }
 
-/* ─── Logs page ───────────────────────────────────────────────────── */
 .logs-header {
     display: flex;
     align-items: center;
@@ -527,7 +513,6 @@ button {
     padding: 1px 0;
 }
 
-/* ─── Config editor ───────────────────────────────────────────────── */
 .config-stack {
     display: flex;
     flex-direction: column;
@@ -647,7 +632,6 @@ button {
     color: var(--accent-danger);
 }
 
-/* ─── Toasts ──────────────────────────────────────────────────────── */
 .toast-container {
     position: fixed;
     top: 18px;
@@ -701,7 +685,6 @@ button {
     }
 }
 
-/* ─── Responsive ──────────────────────────────────────────────────── */
 @media (max-width: 720px) {
     .admin-sidebar {
         width: 200px;

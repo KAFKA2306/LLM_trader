@@ -1,7 +1,3 @@
-/* global DOMPurify */
-/**
- * News panel module - Displays latest crypto news articles.
- */
 
 export async function initNewsPanel() {
     await updateNewsData();
@@ -98,7 +94,6 @@ function truncateText(text, maxLength) {
 function sanitizeUrl(url) {
     if (!url) return '#';
     const cleanUrl = url.trim();
-    // Only allow http and https protocols to prevent XSS (javascript:, data:, etc.)
     if (/^https?:\/\//i.test(cleanUrl)) {
         return cleanUrl;
     }

@@ -1,23 +1,19 @@
-/* global DOMPurify */
-// Sort state
 let currentSort = {
     by: 'date',
     order: 'desc'
 };
 
 export async function initVectorPanel() {
-    // Expose sort handler globally
     window.vectorSort = async (field) => {
         if (currentSort.by === field) {
             currentSort.order = currentSort.order === 'desc' ? 'asc' : 'desc';
         } else {
             currentSort.by = field;
-            currentSort.order = 'desc'; // Default to desc for new field
+            currentSort.order = 'desc'; 
         }
         await updateVectorData();
     };
 
-    // Initial load
     await updateVectorData();
 }
 
@@ -128,7 +124,6 @@ function renderVectorPanel(data, rulesData, blockedData) {
         });
     });
 
-    // Restore focus if it was on a sort header
     if (focusedSortField) {
         const newHeader = container.querySelector(`.sortable-header[data-sort="${focusedSortField}"]`);
         if (newHeader) newHeader.focus();
@@ -166,7 +161,6 @@ function renderStatsCards(data) {
     const adxStats = data.adx_stats || {};
     const factorStats = Array.isArray(data.factor_stats) ? data.factor_stats : Object.values(data.factor_stats || {});
 
-    // Fallback getter for factor stats if keys are strictly strings
     const getFactorWR = (keywords) => {
         const factor = factorStats.find(f => keywords.some(k => f.factor_name && f.factor_name.toUpperCase().includes(k)));
         return factor ? factor.win_rate : '--';
@@ -341,8 +335,6 @@ function renderExperienceTable(experiences) {
         if (!doc) return {};
         const sections = Object.create(null);
         const allowedKeys = new Set(['Indicators', 'Structure', 'Confluences', 'Reasoning', 'Result', 'Post-trade']);
-        // Split on recognisable section labels; the document is space-joined so we
-        // split on "Label:" patterns.
         const pattern = /\b(Indicators|Structure|Confluences|Reasoning|Result|Post-trade):\s*/g;
         let match;
         sections['_header'] = '';
@@ -369,7 +361,6 @@ function renderExperienceTable(experiences) {
         if (!doc) return '--';
         const sections = parseDocumentSections(doc);
 
-        // Keyword pills from header + indicators
         const pillKeywords = [
             { label: 'BULLISH', cls: 'pill-bullish' },
             { label: 'BEARISH', cls: 'pill-bearish' },
@@ -387,7 +378,6 @@ function renderExperienceTable(experiences) {
             .map(kw => `<span class="context-pill ${kw.cls}">${kw.label.replace('_', ' ')}</span>`)
             .join(' ');
 
-        // Indicator mini-row: show ADX + RSI values if present
         let indicatorsHtml = '';
         const indText = sections['Indicators'] || '';
         const adxM = indText.match(/ADX=(\d+\.?\d*)/);
@@ -401,7 +391,6 @@ function renderExperienceTable(experiences) {
             indicatorsHtml = `<div class="doc-section-row" style="color:var(--text-muted);font-size:0.78em;margin-top:3px;">${indParts.join(' &bull; ')}</div>`;
         }
 
-        // Structure mini-row: RR + close_reason label appear here only as text
         let structureHtml = '';
         const strText = sections['Structure'] || '';
         const rrM = strText.match(/RR=([\d.]+)/);
@@ -409,7 +398,6 @@ function renderExperienceTable(experiences) {
             structureHtml = `<div class="doc-section-row" style="color:var(--text-muted);font-size:0.78em;">RR&nbsp;${escapeHtml(rrM[1])}</div>`;
         }
 
-        // Post-trade: MFE / MAE
         let postHtml = '';
         const postText = sections['Post-trade'] || '';
         const mfeM = postText.match(/MFE=([+\d.]+%)/);
