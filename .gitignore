@@ -37,6 +37,7 @@ ENV/
 .claude/
 # Testing
 .pytest_cache/
+.pytest_temp/
 .coverage
 *.future
 htmlcov/
