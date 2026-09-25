@@ -398,7 +398,7 @@ class PromptBuilder:
             ("vortex_plus", "Vortex VI+"),
             ("vortex_minus", "Vortex VI-"),
             ("obv", "OBV"),
-            ("obv_slope", "OBV Slope"),
+            ("net_flow_ratio", "Net Flow Ratio"),
             ("cci", "CCI"),
             ("cmf", "Chaikin MF"),
             ("atr", "ATR"),
@@ -415,6 +415,7 @@ class PromptBuilder:
             "macd_line", "macd_hist", "macd_signal", "roc_14", "cci", "cmf",
             "trix", "tsi", "ppo", "linreg_slope", "coppock", "kst",
         }
+        delta_only_indicators = {"obv", "net_flow_ratio"}
 
         changes = []
         for key, label in key_indicators:
@@ -422,7 +423,9 @@ class PromptBuilder:
             curr_val = self._resolve_indicator_value(current_indicators.get(key))
             if prev_val is None or curr_val is None:
                 continue
-            line = self._format_indicator_change(label, prev_val, curr_val, key in zero_cross_indicators)
+            line = self._format_indicator_change(
+                label, prev_val, curr_val, key in zero_cross_indicators, key in delta_only_indicators
+            )
             if line:
                 changes.append(line)
 
@@ -445,6 +448,7 @@ class PromptBuilder:
         prev_val: float,
         curr_val: float,
         is_zero_cross_type: bool,
+        is_delta_only: bool,
     ) -> str | None:
         diff = curr_val - prev_val
         abs_prev = abs(prev_val)
@@ -456,6 +460,9 @@ class PromptBuilder:
         sign = "+" if diff > 0 else ""
         prec = 2 if abs(curr_val) >= 1 else 4
         val_str = f"{prev_val:.{prec}f} → {curr_val:.{prec}f}"
+
+        if is_delta_only:
+            return f"- {label}: {val_str} ({arrow} Δ{diff:+.4f})"
 
         if is_zero_cross_type and (crossed_zero or abs_prev < 0.1):
             desc = f"({arrow} zero-cross)" if crossed_zero else f"({arrow} Δ{diff:+.4f})"
@@ -571,13 +578,13 @@ class PromptBuilder:
         if ev_context:
             base_prompt += ev_context
 
-        advanced_support_resistance_detected = self._has_advanced_support_resistance()
+        has_retested_support_resistance = self._has_retested_support_resistance()
 
         available_periods = self._calculate_period_candles()
 
         analysis_steps = self.template_manager.build_analysis_steps(
             symbol,
-            advanced_support_resistance_detected,
+            has_retested_support_resistance,
             has_chart_analysis,
             available_periods
         )
@@ -600,20 +607,12 @@ class PromptBuilder:
         """Add custom instruction to the prompt."""
         self.custom_instructions.append(instruction)
 
-    def _has_advanced_support_resistance(self) -> bool:
-        """Check if advanced support/resistance indicators are detected.
-
-        Returns:
-            bool: True if advanced S/R indicators are available and valid
-        """
+    def _has_retested_support_resistance(self) -> bool:
+        """Whether either retested level is available on the latest candle."""
         if self.context is None:
             return False
         td = self.context.technical_data
 
-        adv_support = td.get("advanced_support", np.nan)
-        adv_resistance = td.get("advanced_resistance", np.nan)
-
-        adv_support = last_or_scalar(adv_support)
-        adv_resistance = last_or_scalar(adv_resistance)
-
-        return not math.isnan(adv_support) and not math.isnan(adv_resistance)
+        support = last_or_scalar(td.get("retested_support", np.nan))
+        resistance = last_or_scalar(td.get("retested_resistance", np.nan))
+        return math.isfinite(support) or math.isfinite(resistance)

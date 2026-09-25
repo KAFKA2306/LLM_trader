@@ -118,6 +118,148 @@ def normalize_article_whitespace(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", normalized)
 
 
+_NEWS_CHROME_LINE_TOKENS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"latest news",
+        r"published",
+        r"preview",
+        r"by\s+[A-Z][\w.'-]+(?:\s+[A-Z][\w.'-]+){0,2}\s*\|\s*edited by\s+[A-Z][\w.'-]+(?:\s+[A-Z][\w.'-]+){0,2}",
+        r"by\s+[A-Z][\w.'-]+(?:\s+[A-Z][\w.'-]+){0,2}",
+        r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2},\s+\d{4}(?:,\s*\d{1,2}:\d{2}\s*(?:a\.m\.|p\.m\.)?\s*[A-Z]{2,4})?",
+        r"\d+\s+min read",
+        r"make preferred on",
+        r"share this article",
+        r"copy link",
+        r"copied to clipboard",
+        r"x icon",
+        r"x \(twitter\)",
+        r"linkedin",
+        r"facebook",
+        r"email",
+        r"newsletters?",
+    )
+)
+
+_NEWS_SUMMARY_HEADER = re.compile(r"^\s*(summary|key takeaways?)\s*$", re.IGNORECASE)
+
+_NEWS_SUMMARY_LINE = re.compile(r"^\s*(?:show|show more|hide)\s*$", re.IGNORECASE)
+
+_NEWS_BULLET_LINE = re.compile(r"^\s*(?:\*|•|-|\u2013)\s+")
+
+_NEWS_TAIL_MARKERS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"the post.{0,300}?appeared first on",
+        r"appeared first on",
+        r"subscribe to daily byte-sized",
+        r"crypto, delivered directly to your inbox",
+        r"sign up by signing up",
+        r"by signing up, you will receive",
+        r"preview sign up",
+        r"newsletterseditorial policy",
+        r"editorial policyads disclosure",
+        r"financial risk disclaimer",
+        r"cointelegraph is committed to providing independent",
+        r"the views expressed in this column are those of the author",
+        r"terms of service and privacy policy",
+        r"©\s*cointelegraph",
+        r"all rights reserved",
+        r"disclaimer: the information provided",
+        r"this article does not constitute",
+        r"\s+newsletters?\s*$",
+        r"\s+subscribe\s*$",
+        r"_\*\*related:\*\*_",
+        r"_\*\*magazine:\*\*_",
+    )
+)
+
+NEWS_TAIL_SCAN_RATIO = 0.3
+
+_NEWS_OUTLET_TOKENS = re.compile(
+    r"(?:cryptoslate|cointelegraph|coindesk|the block|decrypt|coingape|bitcoinist|newsbtc|"
+    r"cryptopotato|ambcrypto|utoday|bitcoin\.com|dl news|beincrypto)",
+    re.IGNORECASE,
+)
+
+
+def _is_chrome_only(text: str) -> bool:
+    """Whether the text carries no story at all, only publisher chrome."""
+    remaining = text
+    for token in (*_NEWS_CHROME_LINE_TOKENS, *_NEWS_TAIL_MARKERS):
+        remaining = token.sub(" ", remaining)
+    remaining = _NEWS_OUTLET_TOKENS.sub(" ", remaining)
+    return not re.sub(r"[^A-Za-z]+", "", remaining)
+
+
+def _is_chrome_line(line: str) -> bool:
+    """Whether a line consists only of publisher chrome (nav, byline, share)."""
+    remaining = line.strip()
+    if not remaining:
+        return False
+
+    for token in _NEWS_CHROME_LINE_TOKENS:
+        remaining = token.sub(" ", remaining)
+
+    return not re.sub(r"[\s:|,\u2013\u2014-]+", "", remaining)
+
+
+def _strip_summary_block(lines: list[str]) -> list[str]:
+    """Drop the duplicated 'Summary/Show' bullet preview some outlets prepend."""
+    for index, line in enumerate(lines):
+        if not _NEWS_SUMMARY_HEADER.match(line):
+            continue
+
+        cursor = index + 1
+        while cursor < len(lines) and (
+            _NEWS_SUMMARY_LINE.match(lines[cursor]) or _NEWS_BULLET_LINE.match(lines[cursor])
+        ):
+            cursor += 1
+
+        if cursor > index + 1:
+            return lines[cursor:]
+    return lines
+
+
+def _strip_tail_boilerplate(text: str) -> str:
+    """Cut publisher footers, newsletter calls to action and post credits."""
+    scan_from = int(len(text) * NEWS_TAIL_SCAN_RATIO)
+    cut_at = len(text)
+
+    for marker in _NEWS_TAIL_MARKERS:
+        match = marker.search(text, scan_from)
+        if match and match.start() < cut_at:
+            cut_at = match.start()
+
+    if cut_at == len(text):
+        return text
+
+    line_start = text.rfind("\n", 0, cut_at)
+    return text[: line_start if line_start != -1 else cut_at].rstrip()
+
+
+def strip_news_boilerplate(text: str) -> str:
+    """Remove publisher chrome from an article body before it reaches a prompt.
+
+    Real feeds ship nav lines, bylines, share widgets, a duplicated summary block
+    and footer/newsletter blocks; they eat the article token budget that should
+    carry the story, and the model reads them as content. Bodies that lose all
+    their content are reported as empty so the caller can drop the article.
+    """
+    normalized = normalize_article_whitespace(text)
+    if not normalized:
+        return ""
+
+    lines = [line for line in normalized.split("\n") if not _is_chrome_line(line)]
+    lines = _strip_summary_block(lines)
+
+    cleaned = _strip_tail_boilerplate("\n".join(lines).strip())
+
+    if not cleaned or _is_chrome_only(cleaned):
+        return ""
+    return cleaned
+
+
 def _strip_market_ticker_prefix(text: str) -> str:
     marker_match = _MARKET_TICKER_END_PATTERN.search(text[:_MARKET_TICKER_SCAN_CHARS])
     if marker_match is None:

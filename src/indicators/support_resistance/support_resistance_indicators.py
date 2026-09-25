@@ -89,131 +89,44 @@ def support_resistance_numba(high, low, length):
 
 
 @njit(cache=True)
-def support_resistance_numba_advanced(high, low, close, volume, length):
+def retested_support_resistance_numba(high, low, close, length=120, min_touches=3, price_tolerance=0.005):
+    """Nearest levels with repeated, confirmed swing touches in a trailing window."""
     n = len(close)
-    pivot_points = np.full(n, np.nan)
-    s1 = np.full(n, np.nan)
-    r1 = np.full(n, np.nan)
-    volume_filter = np.full(n, False)
-    rolling_avg_volume = np.full(n, np.nan)
+    support = np.full(n, np.nan)
+    resistance = np.full(n, np.nan)
+    swing_lows = np.full(n, np.nan)
+    swing_highs = np.full(n, np.nan)
 
-    if n < length:
-        strong_support = np.where(volume_filter, s1, np.nan)
-        strong_resistance = np.where(volume_filter, r1, np.nan)
-        return strong_support, strong_resistance
-
-    vol_sum = 0.0
-    nan_count = 0
-    for j in range(length):
-        v = volume[j]
-        if math.isnan(v):
-            nan_count += 1
-        else:
-            vol_sum += v
+    for j in range(1, n - 1):
+        if low[j] <= low[j - 1] and low[j] < low[j + 1]:
+            swing_lows[j] = low[j]
+        if high[j] >= high[j - 1] and high[j] > high[j + 1]:
+            swing_highs[j] = high[j]
 
     for i in range(length, n):
-        if nan_count > 0:
-            rolling_avg_volume[i] = np.nan
-            volume_filter[i] = False
-        else:
-            rolling_avg_volume[i] = vol_sum / length
-            volume_filter[i] = volume[i] > rolling_avg_volume[i]
+        start = max(1, i - length)
+        price = close[i]
+        for swings, levels, is_support in ((swing_lows, support, True), (swing_highs, resistance, False)):
+            for j in range(start, i):
+                anchor = swings[j]
+                if math.isnan(anchor) or anchor <= 0:
+                    continue
+                count = 0
+                total = 0.0
+                for k in range(start, i):
+                    candidate = swings[k]
+                    if not math.isnan(candidate) and abs(candidate - anchor) <= anchor * price_tolerance:
+                        count += 1
+                        total += candidate
+                if count < min_touches:
+                    continue
+                level = total / count
+                if is_support and level < price and (math.isnan(levels[i]) or level > levels[i]):
+                    levels[i] = level
+                if not is_support and level > price and (math.isnan(levels[i]) or level < levels[i]):
+                    levels[i] = level
 
-        old_val = volume[i - length]
-        if math.isnan(old_val):
-            nan_count -= 1
-        else:
-            vol_sum -= old_val
-        new_val = volume[i]
-        if math.isnan(new_val):
-            nan_count += 1
-        else:
-            vol_sum += new_val
-
-        pivot_points[i] = (high[i - 1] + low[i - 1] + close[i - 1]) / 3
-
-        r1[i] = (2 * pivot_points[i]) - low[i - 1]
-        s1[i] = (2 * pivot_points[i]) - high[i - 1]
-
-    strong_support = np.where(volume_filter, s1, np.nan)
-    strong_resistance = np.where(volume_filter, r1, np.nan)
-
-    return strong_support, strong_resistance
-
-@njit(cache=True)
-def advanced_support_resistance_numba(high, low, close, volume, length=50, strength_threshold=2, persistence=1,
-                                      volume_factor=2.0, price_factor=0.005):
-    n = len(close)
-    pivot_points = np.full(n, np.nan)
-    s1 = np.full(n, np.nan)
-    r1 = np.full(n, np.nan)
-    s2 = np.full(n, np.nan)
-    r2 = np.full(n, np.nan)
-    volume_filter = np.full(n, False)
-    rolling_avg_volume = np.full(n, np.nan)
-
-    support_strength = np.zeros(n)
-    resistance_strength = np.zeros(n)
-
-    strong_support = np.full(n, np.nan)
-    strong_resistance = np.full(n, np.nan)
-
-    if n < length:
-        return strong_support, strong_resistance
-
-    vol_sum = 0.0
-    nan_count = 0
-    for j in range(length):
-        v = volume[j]
-        if math.isnan(v):
-            nan_count += 1
-        else:
-            vol_sum += v
-
-    for i in range(length, n):
-        if nan_count > 0:
-            rolling_avg_volume[i] = np.nan
-            volume_filter[i] = False
-        else:
-            rolling_avg_volume[i] = vol_sum / length
-            volume_filter[i] = volume[i] > rolling_avg_volume[i]
-
-        old_val = volume[i - length]
-        if math.isnan(old_val):
-            nan_count -= 1
-        else:
-            vol_sum -= old_val
-        new_val = volume[i]
-        if math.isnan(new_val):
-            nan_count += 1
-        else:
-            vol_sum += new_val
-
-        pivot_points[i] = (high[i - 1] + low[i - 1] + close[i - 1]) / 3
-
-        r1[i] = (2 * pivot_points[i]) - low[i - 1]
-        s1[i] = (2 * pivot_points[i]) - high[i - 1]
-        r2[i] = pivot_points[i] + (high[i - 1] - low[i - 1])
-        s2[i] = pivot_points[i] - (high[i - 1] - low[i - 1])
-
-        if close[i] < s1[i]:
-            support_strength[i] = support_strength[i - 1] + 1
-        elif close[i] > r1[i]:
-            resistance_strength[i] = resistance_strength[i - 1] + 1
-        else:
-            support_strength[i] = max(0, support_strength[i - 1] - 1)
-            resistance_strength[i] = max(0, resistance_strength[i - 1] - 1)
-
-        if volume_filter[i] and volume[i] > volume_factor * rolling_avg_volume[i]:
-            if support_strength[i] >= strength_threshold and close[i] < (1 - price_factor) * s1[i]:
-                for j in range(max(0, i - persistence + 1), i + 1):
-                    strong_support[j] = min(s1[j], s2[j])
-            if resistance_strength[i] >= strength_threshold and close[i] > (1 + price_factor) * r1[i]:
-                for j in range(max(0, i - persistence + 1), i + 1):
-                    strong_resistance[j] = max(r1[j], r2[j])
-
-    return strong_support, strong_resistance
-
+    return support, resistance
 
 @njit(cache=True)
 def find_support_resistance_numba(close, support, resistance, window):

@@ -537,7 +537,8 @@ def test_process_article_respects_the_token_budget():
 
     assert processed.startswith("📰 Token Budget Check\nSrc: coindesk (2024-03-09 16:00 UTC)")
     assert processed.endswith("...")
-    assert counter.count_tokens(processed) == 50
+    assert counter.count_tokens(processed) <= 50
+    assert re.fullmatch(r"[a-z]+\.\.\.", processed.rsplit(" ", 1)[-1])
 
 
 @pytest.mark.parametrize(

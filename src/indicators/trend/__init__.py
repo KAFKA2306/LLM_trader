@@ -4,7 +4,7 @@ from .trend_indicators import (
     parabolic_sar_numba,
     pfe_numba,
     supertrend_numba,
-    td_sequential_numba,
+    td_setup_numba,
     trix_numba,
     vortex_indicator_numba,
 )
@@ -15,7 +15,7 @@ __all__ = [
     "parabolic_sar_numba",
     "pfe_numba",
     "supertrend_numba",
-    "td_sequential_numba",
+    "td_setup_numba",
     "trix_numba",
     "vortex_indicator_numba"
 ]

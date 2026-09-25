@@ -38,11 +38,18 @@ def _find_local_extrema_numba(
     count = 0
 
     for i in range(lookback, n - lookback):
+        if np.isnan(data[i]):
+            continue
+
         is_extrema = True
 
         for j in range(i - lookback, i + lookback + 1):
             if j == i:
                 continue
+
+            if np.isnan(data[j]):
+                is_extrema = False
+                break
 
             if find_maxima:
                 if data[i] <= data[j]:

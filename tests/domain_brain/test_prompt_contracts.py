@@ -432,20 +432,22 @@ def test_resolve_indicator_value_matrix(raw, expected):
 
 
 @pytest.mark.parametrize(
-    ("label", "previous", "current", "zero_cross", "expected"),
+    ("label", "previous", "current", "zero_cross", "delta_only", "expected"),
     [
-        ("RSI", 50.0000001, 50.0000002, False, None),
-        ("MACD", -0.5, 0.5, True, "- MACD: -0.5000 → 0.5000 (↑ zero-cross)"),
-        ("RSI", 50.0, 55.0, False, "- RSI: 50.00 → 55.00 (↑ +10.0%)"),
-        ("OBV_Delta", 0.00001, 0.05, False, "- OBV_Delta: 0.0000 → 0.0500 (↑ Δ+0.0500)"),
+        ("RSI", 50.0000001, 50.0000002, False, False, None),
+        ("MACD", -0.5, 0.5, True, False, "- MACD: -0.5000 → 0.5000 (↑ zero-cross)"),
+        ("RSI", 50.0, 55.0, False, False, "- RSI: 50.00 → 55.00 (↑ +10.0%)"),
+        ("OBV_Delta", 0.00001, 0.05, False, False, "- OBV_Delta: 0.0000 → 0.0500 (↑ Δ+0.0500)"),
+        ("OBV", 1000.0, 1500.0, False, True, "- OBV: 1000.00 → 1500.00 (↑ Δ+500.0000)"),
+        ("Net Flow Ratio", -0.2, 0.3, False, True, "- Net Flow Ratio: -0.2000 → 0.3000 (↑ Δ+0.5000)"),
     ],
-    ids=["negligible", "zero-cross", "percent-change", "small-baseline"],
+    ids=["negligible", "zero-cross", "percent-change", "small-baseline", "obv-delta", "ratio-delta"],
 )
-def test_format_indicator_change_matrix(config, label, previous, current, zero_cross, expected):
+def test_format_indicator_change_matrix(config, label, previous, current, zero_cross, delta_only, expected):
     """Below-threshold moves vanish; zero-cross and small-baseline deltas use their own wording."""
     builder = make_builder(config)
 
-    assert builder._format_indicator_change(label, previous, current, zero_cross) == expected
+    assert builder._format_indicator_change(label, previous, current, zero_cross, delta_only) == expected
 
 
 def test_previous_indicators_section_contract(config):
@@ -473,6 +475,19 @@ def test_previous_indicators_section_contract(config):
         "INTERPRETATION: Look for trend continuation (momentum building) vs reversal "
         "(divergence, exhaustion)."
     )
+
+
+def test_previous_indicators_section_shows_volume_flow_as_deltas_not_percent(config):
+    """OBV level and the bounded net-flow ratio are reported as deltas, never as percentage change."""
+    builder = make_builder(config)
+    section = builder.build_previous_indicators_section(
+        {"obv": 1000.0, "net_flow_ratio": -0.2},
+        {"obv": 1500.0, "net_flow_ratio": 0.3},
+    )
+
+    assert "- OBV: 1000.00 → 1500.00 (↑ Δ+500.0000)" in section
+    assert "- Net Flow Ratio: -0.2000 → 0.3000 (↑ Δ+0.5000)" in section
+    assert "OBV: 1000.00 → 1500.00 (↑ +50.0%)" not in section
 
 
 def test_prompt_metadata_is_exposed_from_template_manager(config):

@@ -37,9 +37,9 @@ from src.indicators.statistical import (
     zscore_numba,
 )
 from src.indicators.support_resistance import (
-    advanced_support_resistance_numba,
     fibonacci_pivot_points_numba,
     pivot_points_numba,
+    retested_support_resistance_numba,
     support_resistance_numba,
 )
 from src.indicators.trend import (
@@ -48,7 +48,7 @@ from src.indicators.trend import (
     parabolic_sar_numba,
     pfe_numba,
     supertrend_numba,
-    td_sequential_numba,
+    td_setup_numba,
     trix_numba,
     vortex_indicator_numba,
 )
@@ -69,8 +69,8 @@ from src.indicators.volume import (
     eom_numba,
     force_index_numba,
     mfi_numba,
+    net_flow_ratio_numba,
     obv_numba,
-    obv_slope_numba,
     pvt_numba,
     rolling_vwap_numba,
     twap_numba,
@@ -102,7 +102,7 @@ class TechnicalIndicators(IndicatorBase):
             rsi_numba,
             self.close,
             length,
-            required_length=length
+            required_length=length + 1
         )
 
     def macd(
@@ -397,25 +397,20 @@ class TechnicalIndicators(IndicatorBase):
             required_length=length
         )
 
-    def advanced_support_resistance(
+    def retested_support_resistance(
             self,
-            length: int = 25,
-            strength_threshold: int = 1,
-            persistence: int = 1,
-            volume_factor: float = 1.3,
-            price_factor: float = 0.004
+            length: int = 120,
+            min_touches: int = 3,
+            price_tolerance: float = 0.005
     ) -> tuple[np.ndarray, np.ndarray]:
         return self.calculate_indicator(
-            advanced_support_resistance_numba,
+            retested_support_resistance_numba,
             self.high,
             self.low,
             self.close,
-            self.volume,
             length,
-            strength_threshold,
-            persistence,
-            volume_factor,
-            price_factor,
+            min_touches,
+            price_tolerance,
             required_length=length
         )
 
@@ -528,9 +523,9 @@ class TechnicalIndicators(IndicatorBase):
             m
         )
 
-    def td_sequential(self, length: int = 9) -> np.ndarray:
+    def td_setup(self, length: int = 9) -> np.ndarray:
         return self.calculate_indicator(
-            td_sequential_numba,
+            td_setup_numba,
             self.close,
             length,
             required_length=5
@@ -657,14 +652,14 @@ class TechnicalIndicators(IndicatorBase):
             required_length=length
         )
 
-    def obv_slope(self, length: int = 20, lookback: int = 10) -> np.ndarray:
-        """Calculate OBV slope - normalized rate of change indicating accumulation/distribution."""
-        obv = self.obv(length=length)
+    def net_flow_ratio(self, lookback: int = 10) -> np.ndarray:
+        """Signed volume balance over the trailing window, bounded to -1..1."""
         return self.calculate_indicator(
-            obv_slope_numba,
-            obv,
+            net_flow_ratio_numba,
+            self.close,
+            self.volume,
             lookback,
-            required_length=length + lookback
+            required_length=lookback + 1
         )
 
     def pvt(self, length: int = 14, drift: int = 1) -> np.ndarray:

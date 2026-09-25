@@ -93,33 +93,16 @@ class MarketMetricsCalculator:
 
         start_idx = -len(ohlcv_slice)
         end_idx = -1
-        indicator_changes = self._calculate_indicator_changes_for_period(context, start_idx, end_idx)
+        indicator_changes = self._calculate_indicator_changes_for_period(
+            context, start_idx, end_idx, basic_metrics["total_volume"]
+        )
 
-        current_price = float(ohlcv_slice[-1, 4])
         td = context.technical_data
 
-        support_level = current_price
-        resistance_level = current_price
-
-        if "advanced_support" in td and "advanced_resistance" in td:
-            adv_support = td.get("advanced_support", np.nan)
-            adv_resistance = td.get("advanced_resistance", np.nan)
-
-            adv_support = last_or_scalar(adv_support)
-            adv_resistance = last_or_scalar(adv_resistance)
-
-            if not math.isnan(adv_support):
-                support_level = adv_support
-            else:
-                support_level = basic_metrics["lowest_price"]
-
-            if not math.isnan(adv_resistance):
-                resistance_level = adv_resistance
-            else:
-                resistance_level = basic_metrics["highest_price"]
-        else:
-            support_level = basic_metrics["lowest_price"]
-            resistance_level = basic_metrics["highest_price"]
+        support = last_or_scalar(td.get("retested_support", np.nan))
+        resistance = last_or_scalar(td.get("retested_resistance", np.nan))
+        support_level = support if math.isfinite(support) else basic_metrics["lowest_price"]
+        resistance_level = resistance if math.isfinite(resistance) else basic_metrics["highest_price"]
 
         levels = {
             "support": support_level,
@@ -155,7 +138,9 @@ class MarketMetricsCalculator:
             "data_points": len(prices)
         }
 
-    def _calculate_indicator_changes_for_period(self, context, start_idx: int, end_idx: int) -> dict:
+    def _calculate_indicator_changes_for_period(
+        self, context, start_idx: int, end_idx: int, total_volume: float
+    ) -> dict:
         """Calculate changes in technical indicators over the period"""
         indicator_changes = {}
 
@@ -178,12 +163,14 @@ class MarketMetricsCalculator:
                         start_value = float(values[start_idx])
                         end_value = float(values[end_idx])
                         change = end_value - start_value
-                        change_pct = (change / abs(start_value)) * 100 if start_value != 0 else 0
 
                         indicator_changes[f"{ind_name}_start"] = start_value
                         indicator_changes[f"{ind_name}_end"] = end_value
                         indicator_changes[f"{ind_name}_change"] = change
-                        indicator_changes[f"{ind_name}_change_pct"] = change_pct
+                        if ind_name == "obv":
+                            indicator_changes["obv_flow_ratio"] = change / total_volume if total_volume > 0 else 0.0
+                        else:
+                            indicator_changes[f"{ind_name}_change_pct"] = (change / abs(start_value)) * 100 if start_value != 0 else 0
                     except (IndexError, ValueError, TypeError) as e:
                         self.logger.debug("Could not calculate change for %s: %s", ind_name, e)
                 else:

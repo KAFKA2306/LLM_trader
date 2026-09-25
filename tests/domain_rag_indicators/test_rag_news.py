@@ -23,6 +23,7 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 import pytest
 
 from src.rag.article_processor import ArticleProcessor
+from src.rag.context_builder import ContextBuilder
 from src.rag.local_taxonomy import LocalTaxonomyProvider
 from src.rag.news_ingestion.crawl4ai_enricher import Crawl4AIEnricher
 from src.rag.news_ingestion.rss_primitives import (
@@ -37,9 +38,14 @@ from src.rag.news_ingestion.rss_primitives import (
     strip_html,
 )
 from src.rag.news_ingestion.rss_provider import RSSCrawl4AINewsProvider
-from src.rag.news_ingestion.schema_mapper import make_article_id, to_article_schema
+from src.rag.news_ingestion.schema_mapper import (
+    make_article_id,
+    strip_news_boilerplate,
+    to_article_schema,
+)
 from src.rag.news_manager import NewsManager
 from src.rag.news_repository import NewsRepository
+from src.utils.token_counter import TokenCounter
 from tests.conftest import make_config, null_logger
 
 GET_SOURCES = "src.rag.news_ingestion.rss_provider.get_sources"
@@ -1018,3 +1024,136 @@ def test_article_processor_detects_coins_across_categories_title_and_whole_body(
         "SOL",
         "ETH",
     }
+
+
+REAL_BODY = (
+    "Circle and Tether said late Thursday that they had frozen the wallet holding the stolen funds. "
+    "The issuer added that it freezes assets whenever it is legally required to do so, and that the "
+    "decision followed a formal request from the exchange's security team working with law enforcement. "
+    "Traders on major venues priced the news as neutral, with funding rates unchanged across the "
+    "largest perpetual contracts and spot volumes returning to their weekly average within hours."
+)
+
+COINTELEGRAPH_CHROME_TAIL = (
+    "\n\n_**Related:**__**Bitcoin falls below $84K as 10-year Treasury yield hits 19-year high**_\n\n"
+    "Subscribe to daily byte-sized crypto news from Cointelegraph\n"
+    "Subscribe\n"
+    "Get more of Cointelegraph on Google\n"
+    "Add Cointelegraph as a preferred source for Google Search.\n"
+    "AboutAbout CointelegraphPodcastsNewslettersEditorial PolicyAds DisclosureFinancial Risk Disclaimer\n"
+    "Cointelegraph is committed to providing independent, high-quality journalism for the crypto community.\n"
+    "(c) Cointelegraph 2013 - 2026Terms of Service and Privacy Policy\n"
+)
+
+COINDESK_CHROME_HEAD = (
+    "The stablecoin issuer blacklisted a wallet tied to the exploit, according to on-chain data.\n"
+    "By Oliver Knight|Edited by Stephen Alpher\n"
+    "Sep 25, 2026, 10:41 a.m. EDT\n"
+    "1 min read\n"
+    "Make preferred on\n"
+    "Share this article\n"
+    "Copy linkX iconX (Twitter)LinkedInFacebookEmail\n"
+    "Summary\n"
+    "Show\n"
+    " * Circle and Tether froze the wallet.\n"
+    " * The issuer said reserves cover the loss.\n"
+    "\n"
+)
+
+
+def test_strip_news_boilerplate_removes_cointelegraph_footer():
+    cleaned = strip_news_boilerplate(REAL_BODY + COINTELEGRAPH_CHROME_TAIL)
+
+    assert cleaned == REAL_BODY
+    for junk in (
+        "Related:",
+        "Subscribe",
+        "NewslettersEditorial",
+        "Financial Risk Disclaimer",
+        "Cointelegraph is committed",
+        "Terms of Service",
+    ):
+        assert junk not in cleaned
+
+
+def test_strip_news_boilerplate_removes_coindesk_chrome_and_summary_block():
+    cleaned = strip_news_boilerplate(COINDESK_CHROME_HEAD + REAL_BODY)
+
+    assert REAL_BODY in cleaned
+    for junk in (
+        "By Oliver Knight",
+        "1 min read",
+        "Make preferred on",
+        "Share this article",
+        "Copy link",
+        "Summary",
+        "Circle and Tether froze the wallet.",
+    ):
+        assert junk not in cleaned
+
+
+def test_strip_news_boilerplate_removes_wordpress_post_credit():
+    body = REAL_BODY + "\nThe postUS crypto ETFs draw over $3 billionappeared first onCryptoSlate."
+    cleaned = strip_news_boilerplate(body)
+
+    assert cleaned == REAL_BODY
+    assert "appeared first on" not in cleaned
+    assert "The post" not in cleaned
+
+
+def test_strip_news_boilerplate_reports_pure_junk_body_as_empty():
+    assert strip_news_boilerplate("appeared first onCryptoSlate.") == ""
+    assert strip_news_boilerplate("   \n  ") == ""
+
+
+def test_strip_news_boilerplate_keeps_clean_prose_untouched():
+    assert strip_news_boilerplate(REAL_BODY) == REAL_BODY
+
+
+def test_context_builder_last_sentence_boundary_ignores_decimal_points():
+    decimal_only = "The fund grew to about $2.25 billion in assets under management across several venues"
+
+    assert ContextBuilder._last_sentence_boundary(decimal_only) is None
+
+    with_sentence_end = decimal_only + ", and it kept growing until the reporting period closed."
+    boundary = ContextBuilder._last_sentence_boundary(with_sentence_end)
+
+    assert boundary is not None
+    assert with_sentence_end[:boundary].endswith("period closed.")
+
+
+def make_context_builder() -> ContextBuilder:
+    return ContextBuilder(
+        logger=null_logger(),
+        token_counter=TokenCounter(),
+        config=make_config(),
+        scoring_policy=MagicMock(),
+    )
+
+
+def test_process_article_simple_drops_pure_junk_and_strips_chrome():
+    builder = make_context_builder()
+    junk_item = {
+        "title": "Empty body",
+        "body": "appeared first onCryptoSlate.",
+        "url": "https://example.com/junk",
+        "source_info": {"name": "cryptoslate"},
+        "published_on": 1700000000.0,
+    }
+
+    assert builder._process_article_simple(junk_item, 800) == ""
+
+    item = {
+        "title": "Real headline",
+        "body": COINDESK_CHROME_HEAD + REAL_BODY,
+        "url": "https://example.com/real",
+        "source_info": {"name": "coindesk"},
+        "published_on": 1700000000.0,
+    }
+    processed = builder._process_article_simple(item, 800)
+
+    assert "Real headline" in processed
+    assert "Circle and Tether said late Thursday" in processed
+    assert "Make preferred on" not in processed
+    assert "Share this article" not in processed
+    assert "Summary" not in processed

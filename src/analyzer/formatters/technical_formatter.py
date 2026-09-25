@@ -11,24 +11,13 @@ from src.logger.logger import Logger
 from src.utils.data_utils import (
     get_last_n_valid,
     get_last_valid_value,
-    safe_array_to_scalar,
 )
-from src.utils.timeframe_validator import TimeframeValidator
+from src.utils.pattern_recency import is_pattern_recent
 
 if TYPE_CHECKING:
     from src.utils.format_utils import FormatUtils
 
 _PRICE_ACTION_LOOKBACK = 24
-
-_STALENESS_TARGET_HOURS: dict[str, int] = {
-    "rsi": 40,
-    "macd": 40,
-    "stochastic": 40,
-    "ma_crossover": 200,
-    "divergence": 80,
-    "volatility": 20,
-    "volume": 40,
-}
 
 
 class TechnicalFormatter:
@@ -51,14 +40,15 @@ class TechnicalFormatter:
             return "TECHNICAL ANALYSIS:\nNo technical data available."
 
         td = context.technical_data
+        history = context.technical_history
 
         patterns_section = self._format_patterns_section(context, timeframe)
         price_action_section = self.format_price_action_section(context, td)
-        momentum_section = self.format_momentum_section(td)
-        trend_section = self.format_trend_section(td)
-        volume_section = self.format_volume_section(td)
-        volatility_section = self.format_volatility_section(td)
-        advanced_section = self.format_advanced_indicators_section(td)
+        momentum_section = self.format_momentum_section(td, history)
+        trend_section = self.format_trend_section(td, history, float(context.ohlcv_candles[-1, 4]))
+        volume_section = self.format_volume_section(td, history)
+        volatility_section = self.format_volatility_section(td, history)
+        advanced_section = self.format_advanced_indicators_section(td, history)
         key_levels_section = self.format_key_levels_section(td)
 
         technical_analysis = f"""\n## Technical ({timeframe})\n\n{price_action_section}\n\n{momentum_section}\n\n{trend_section}\n\n{volatility_section}\n\n{volume_section}\n\n## Stats:\n- Hurst:{self.format_utils.fmt_ta(td, 'hurst', 2)} Z:{self.format_utils.fmt_ta(td, 'zscore', 2)} Kurt:{self.format_utils.fmt_ta(td, 'kurtosis', 2)}\n- Entropy:{self.format_utils.fmt_ta(td, 'entropy', 3)} Skew:{self.format_utils.fmt_ta(td, 'skewness', 2)} Var:{self.format_utils.fmt_ta(td, 'variance', 8)}\n- LinReg: Slope:{self.format_utils.fmt_ta(td, 'linreg_slope', 8)} R²:{self.format_utils.fmt_ta(td, 'linreg_r2', 3)}\n\n{key_levels_section}\n\n{advanced_section}\n\n{patterns_section}"""
@@ -144,28 +134,28 @@ class TechnicalFormatter:
 
         return price_action
 
-    def format_momentum_section(self, td: dict) -> str:
+    def format_momentum_section(self, td: dict, history: dict) -> str:
         """Format the momentum indicators section with temporal context (last 12 candles)."""
-        rsi_temporal = self._format_temporal_array(td, "rsi", 12, 1)
-        macd_hist_temporal = self._format_temporal_array(td, "macd_hist", 12, 8)
-        stoch_k_temporal = self._format_temporal_array(td, "stoch_k", 12, 1)
+        rsi_temporal = self._format_temporal_array(history, "rsi", 12, 1)
+        macd_hist_temporal = self._format_temporal_array(history, "macd_hist", 12, 8)
+        stoch_k_temporal = self._format_temporal_array(history, "stoch_k", 12, 1)
 
         return f"""## Momentum:
 - RSI:{self.format_utils.fmt_ta(td, 'rsi', 1)}{rsi_temporal} | MACD:{self.format_utils.fmt_ta(td, 'macd_line', 8)}/{self.format_utils.fmt_ta(td, 'macd_signal', 8)} Hist:{self.format_utils.fmt_ta(td, 'macd_hist', 8)}{macd_hist_temporal}
 - Stoch %K:{self.format_utils.fmt_ta(td, 'stoch_k', 1)}{stoch_k_temporal} %D:{self.format_utils.fmt_ta(td, 'stoch_d', 1)} | Williams %R:{self.format_utils.fmt_ta(td, 'williams_r', 1)}
 - TSI:{self.format_utils.fmt_ta(td, 'tsi', 2)} | RMI:{self.format_utils.fmt_ta(td, 'rmi', 1)} | PPO:{self.format_utils.fmt_ta(td, 'ppo', 2)} | ROC:{self.format_utils.fmt_ta(td, 'roc_14', 2)}"""
 
-    def format_trend_section(self, td: dict) -> str:
+    def format_trend_section(self, td: dict, history: dict, current_price: float) -> str:
         """Format the trend indicators section with temporal context for trend strength evolution."""
         supertrend_direction = self.format_utils.get_supertrend_direction_string(td.get("supertrend_direction", 0))
 
-        td_seq_str = self._format_td_sequential(td)
+        td_seq_str = self._format_td_setup(td)
 
         sma_str = self._format_sma_structure(td)
 
-        ichimoku_str = self._format_ichimoku_signal(td)
+        ichimoku_str = self._format_ichimoku_signal(td, current_price)
 
-        adx_temporal = self._format_temporal_array(td, "adx", 12, 1)
+        adx_temporal = self._format_temporal_array(history, "adx", 12, 1)
 
         return (
             "## Trend:\n"
@@ -175,11 +165,11 @@ class TechnicalFormatter:
             f"{sma_str}"
         )
 
-    def format_volume_section(self, td: dict) -> str:
+    def format_volume_section(self, td: dict, history: dict) -> str:
         """Format the volume indicators section with temporal context for volume trends."""
         cmf_interpretation = self.format_utils.format_cmf_interpretation(td)
 
-        mfi_temporal = self._format_temporal_array(td, "mfi", 12, 1)
+        mfi_temporal = self._format_temporal_array(history, "mfi", 12, 1)
 
         return (
             "## Volume:\n"
@@ -188,13 +178,13 @@ class TechnicalFormatter:
             f"- PVT:{self.format_utils.fmt_ta(td, 'pvt', 0)} | AD Line:{self.format_utils.fmt_ta(td, 'ad_line', 0)}"
         )
 
-    def format_volatility_section(self, td: dict) -> str:
+    def format_volatility_section(self, td: dict, history: dict) -> str:
         """Format the volatility indicators section with temporal context for volatility evolution."""
         bb_interpretation = self.format_utils.format_bollinger_interpretation(td)
 
-        atr_temporal = self._format_temporal_array(td, "atr", 12, 8)
+        atr_temporal = self._format_temporal_array(history, "atr", 12, 8)
 
-        bb_percent_b_temporal = self._format_temporal_array(td, "bb_percent_b", 12, 2)
+        bb_percent_b_temporal = self._format_temporal_array(history, "bb_percent_b", 12, 2)
 
         chop_str = self._format_choppiness(td)
 
@@ -214,17 +204,17 @@ class TechnicalFormatter:
             f"- FibPivot:{self.format_utils.fmt_ta(td, 'fib_pivot_point', 8)} S[{self.format_utils.fmt_ta(td, 'fib_pivot_s1', 8)},{self.format_utils.fmt_ta(td, 'fib_pivot_s2', 8)}] R[{self.format_utils.fmt_ta(td, 'fib_pivot_r1', 8)},{self.format_utils.fmt_ta(td, 'fib_pivot_r2', 8)}]"
         )
 
-    def format_advanced_indicators_section(self, td: dict) -> str:
+    def format_advanced_indicators_section(self, td: dict, history: dict) -> str:
         """Format advanced indicators section with temporal context for advanced signals."""
-        cci_temporal = self._format_temporal_array(td, "cci", 12, 1)
+        cci_temporal = self._format_temporal_array(history, "cci", 12, 1)
 
-        coppock_temporal = self._format_temporal_array(td, "coppock", 12, 2)
+        coppock_temporal = self._format_temporal_array(history, "coppock", 12, 2)
 
-        kst_temporal = self._format_temporal_array(td, "kst", 12, 2)
+        kst_temporal = self._format_temporal_array(history, "kst", 12, 2)
 
         return (
             "## Advanced:\n"
-            f"- Adv S/R: {self.format_utils.fmt_ta(td, 'advanced_support', 8)}/{self.format_utils.fmt_ta(td, 'advanced_resistance', 8)}\n"
+            f"- Retested S/R: {self.format_utils.fmt_ta(td, 'retested_support', 8)}/{self.format_utils.fmt_ta(td, 'retested_resistance', 8)}\n"
             f"- CCI:{self.format_utils.fmt_ta(td, 'cci', 1)}{cci_temporal} | ATR%:{self.format_utils.fmt_ta(td, 'atr_percent', 2)}% | SAR:{self.format_utils.fmt_ta(td, 'sar', 8)}\n"
             f"- Donchian: U:{self.format_utils.fmt_ta(td, 'donchian_upper', 8)} L:{self.format_utils.fmt_ta(td, 'donchian_lower', 8)}\n"
             f"- UltOsc:{self.format_utils.fmt_ta(td, 'uo', 1)} | Coppock:{self.format_utils.fmt_ta(td, 'coppock', 2)}{coppock_temporal} | KST:{self.format_utils.fmt_ta(td, 'kst', 2)}{kst_temporal}\n"
@@ -244,26 +234,8 @@ class TechnicalFormatter:
                 if patterns_list:
                     for pattern_dict in patterns_list:
                         pattern_index = pattern_dict.get("index", None)
-                        if last_candle_index is not None and pattern_index is not None:
-                            total_candles = last_candle_index + 1
-                            periods_ago = last_candle_index - pattern_index
-
-                            abs_threshold = self._calculate_staleness_threshold(category, timeframe)
-
-                            if category == "ma_crossover":
-                                pct_threshold = int(total_candles * 0.3)
-                            elif category in ["volatility", "volume"]:
-                                pct_threshold = max(10, int(total_candles * 0.05))
-                            elif category == "divergence":
-                                pct_threshold = max(20, int(total_candles * 0.10))
-                            else:
-                                pct_threshold = max(20, int(total_candles * 0.15))
-
-                            recency_threshold = min(abs_threshold, pct_threshold)
-
-                            is_recent = periods_ago <= recency_threshold
-                        else:
-                            is_recent = True
+                        total_candles = last_candle_index + 1 if last_candle_index is not None else None
+                        is_recent = is_pattern_recent(pattern_index, total_candles, category, timeframe)
 
                         if is_recent:
                             pattern_type = pattern_dict.get("type", "")
@@ -287,23 +259,6 @@ class TechnicalFormatter:
                     self.logger.debug("Including %s recent patterns in technical analysis (dedup + recency filter)", len(pattern_summaries))
                 return "\n\n## Detected Patterns:\n" + "\n".join(pattern_summaries[-25:])
 
-        ohlcv_data = context.ohlcv_candles
-        technical_history = context.technical_data.get("history", {})
-
-        patterns = self.technical_calculator.get_all_patterns(ohlcv_data, technical_history)
-
-        if self.logger:
-            self.logger.debug("Using fallback pattern detection, found %s patterns", len(patterns))
-
-        if patterns:
-            pattern_summaries = []
-            for pattern in patterns[-5:]:
-                description = pattern.get("description", "Unknown pattern")
-                compressed_desc = self._compress_pattern_description(description)
-                pattern_summaries.append(f"- {compressed_desc}")
-
-            if pattern_summaries:
-                return "\n\n## Detected Patterns:\n" + "\n".join(pattern_summaries)
 
         return ""
 
@@ -352,23 +307,14 @@ class TechnicalFormatter:
             return base.split("_")[0] + "_divergence"
         return base
 
-    def _calculate_staleness_threshold(self, category: str, timeframe: str) -> int:
-        """Calculate staleness threshold dynamically based on timeframe."""
-        try:
-            minutes_per_candle = TimeframeValidator.to_minutes(timeframe)
-        except (ValueError, TypeError):
-            minutes_per_candle = 240
+    def _format_td_setup(self, td: dict) -> str:
+        """Format the TD Setup count (DeMark setup phase, trend exhaustion detector).
 
-        target_minutes = _STALENESS_TARGET_HOURS.get(category, 40) * 60
-        return max(1, target_minutes // minutes_per_candle)
-
-    def _format_td_sequential(self, td: dict) -> str:
-        """Format TD Sequential indicator (trend exhaustion detector).
-
-        TD Sequential counts consecutive candles (up to 9) where close > close[4] (bullish)
-        or close < close[4] (bearish). Count of 8-9 signals potential trend exhaustion.
+        Counts consecutive candles (up to 9) where close > close[4] (bullish)
+        or close < close[4] (bearish). A count of 8-9 signals potential trend
+        exhaustion; the DeMark countdown phase is not implemented.
         """
-        td_seq = td.get("td_sequential")
+        td_seq = td.get("td_setup")
         if td_seq is None:
             return ""
 
@@ -377,10 +323,10 @@ class TechnicalFormatter:
             return ""
         if td_val > 0:
             count = int(abs(td_val))
-            return f" | TD:{count}↑⚠️" if count >= 8 else f" | TD:{count}↑" if count >= 1 else ""
+            return f" | TD Setup:{count}↑⚠️" if count >= 8 else f" | TD Setup:{count}↑" if count >= 1 else ""
         if td_val < 0:
             count = int(abs(td_val))
-            return f" | TD:{count}↓⚠️" if count >= 8 else f" | TD:{count}↓" if count >= 1 else ""
+            return f" | TD Setup:{count}↓⚠️" if count >= 8 else f" | TD Setup:{count}↓" if count >= 1 else ""
         return ""
 
     def _format_sma_structure(self, td: dict) -> str:
@@ -420,24 +366,18 @@ class TechnicalFormatter:
 
         return f"- SMAs: {' '.join(sma_parts)}{cross_signal}"
 
-    def _format_ichimoku_signal(self, td: dict) -> str:
-        """Format Ichimoku cloud position signal.
-
-        Shows whether price is above cloud (bullish), below cloud (bearish), or in cloud (neutral).
-        Calculates signal on-demand from raw span data.
-        """
+    def _format_ichimoku_signal(self, td: dict, current_price: float) -> str:
+        """Format the last closed candle's position relative to its Ichimoku cloud."""
         span_a = td.get("ichimoku_span_a")
         span_b = td.get("ichimoku_span_b")
-        close_data = td.get("close")
 
-        if span_a is None or span_b is None or close_data is None:
+        if span_a is None or span_b is None:
             return ""
 
         span_a_val = get_last_valid_value(span_a)
         span_b_val = get_last_valid_value(span_b)
-        current_price = safe_array_to_scalar(close_data, -1)
 
-        if span_a_val is None or span_b_val is None or current_price is None:
+        if span_a_val is None or span_b_val is None:
             return ""
 
         cloud_top = max(span_a_val, span_b_val)

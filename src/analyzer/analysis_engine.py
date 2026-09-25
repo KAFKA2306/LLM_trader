@@ -25,6 +25,7 @@ from src.utils.indicator_classifier import (
     classify_volume_state,
     resolve_scalar,
 )
+from src.utils.pattern_recency import filter_recent_patterns
 from src.utils.profiler import profile_performance
 from src.utils.timeframe_validator import TimeframeValidator
 
@@ -436,6 +437,13 @@ class AnalysisEngine:
             self.context.technical_history,
             self.context.long_term_data,
             self.context.timestamps
+        )
+
+        # Drop stale patterns once, at the source: the prompt formatter and the
+        # deterministic quality scorer must score the same set the model reads.
+        total_candles = len(self.context.ohlcv_candles) if self.context.ohlcv_candles is not None else None
+        technical_patterns = filter_recent_patterns(
+            technical_patterns, total_candles, self.context.timeframe
         )
 
         if any(technical_patterns.values()):

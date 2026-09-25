@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from src.logger.logger import Logger
 from src.rag.article_processor import ArticleProcessor
-from src.rag.news_ingestion.schema_mapper import normalize_article_whitespace
+from src.rag.news_ingestion.schema_mapper import strip_news_boilerplate
 from src.rag.scoring_policy import ArticleScoringPolicy
 from src.utils.profiler import profile_performance
 from src.utils.token_counter import TokenCounter
@@ -166,6 +166,19 @@ class ContextBuilder:
 
         return "\n\n".join(context_parts)
 
+    @staticmethod
+    def _last_sentence_boundary(text: str) -> int | None:
+        """Index just past the last sentence end in the second half of the text.
+
+        A cut only lands on '.', '!' or '?' followed by whitespace, so a price
+        like 'about $2.25 billion' never becomes the end of the excerpt.
+        """
+        boundary = None
+        for match in re.finditer(r"[.!?](?=\s|$)", text):
+            if match.start() > len(text) * 0.5:
+                boundary = match.end()
+        return boundary
+
     def _process_article_simple(self, item: dict, max_tokens: int) -> str:
         """
         Process a single article: Title + article body (truncated only by budget).
@@ -182,7 +195,10 @@ class ContextBuilder:
         if not body:
             return ""
 
-        body = normalize_article_whitespace(body)
+        body = strip_news_boilerplate(body)
+        if not body:
+            return ""
+
         paragraphs = [paragraph.strip() for paragraph in body.split("\n\n") if paragraph.strip()]
 
         if not paragraphs:
@@ -205,11 +221,13 @@ class ContextBuilder:
         truncated = article_body[:max_chars].rstrip()
 
         last_paragraph = truncated.rfind("\n\n")
-        last_period = truncated.rfind(".")
-        if last_period > len(truncated) * 0.5:
-            truncated = truncated[:last_period + 1]
+        sentence_end = self._last_sentence_boundary(truncated)
+        if sentence_end is not None:
+            truncated = truncated[:sentence_end]
         elif last_paragraph > len(truncated) * 0.5:
             truncated = truncated[:last_paragraph]
+        elif " " in truncated:
+            truncated = truncated.rsplit(" ", 1)[0].rstrip(" ,;:")
 
         candidate = f"{header}\n{truncated}..."
         while self.token_counter.count_tokens(candidate) > max_tokens and len(truncated) > 200:

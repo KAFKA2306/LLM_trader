@@ -10,8 +10,10 @@ import numpy as np
 import pytest
 
 from src.analyzer.formatters.ev_formatter import EVFrameworkFormatter
+from src.analyzer.formatters.long_term_formatter import LongTermFormatter
 from src.analyzer.formatters.market_formatter import MarketFormatter
 from src.analyzer.formatters.technical_formatter import TechnicalFormatter
+from src.analyzer.technical_calculator import TechnicalCalculator
 from src.trading.regime_risk_profile import RegimeRiskProfile, RegimeRiskProfileSelector
 
 PARTIAL_30D = {
@@ -271,3 +273,51 @@ def test_price_action_drops_non_finite_candles_before_scoring(technical_formatte
         assert "nan" not in result.lower()
         assert "Close Trend: ↑RISING (4G/0R, +3.0%)" in result
         assert "(NORMAL)" in result
+
+
+def test_technical_prompt_uses_history_only_for_temporal_context(technical_formatter):
+    technical_formatter.technical_calculator = TechnicalCalculator()
+    ohlcv = candles([100.0] * 30, [120.0] * 30)
+    context = price_action_context(ohlcv)
+    context.current_price = 105.0
+    context.technical_patterns = {}
+    context.technical_data = {
+        "rsi": 60.0,
+        "adx": 25.0,
+        "ichimoku_span_a": 110.0,
+        "ichimoku_span_b": 108.0,
+    }
+    context.technical_history = {
+        "rsi": np.linspace(40.0, 60.0, 30),
+        "adx": np.linspace(15.0, 25.0, 30),
+    }
+    result = technical_formatter.format_technical_analysis(context, "4h")
+
+    assert "RSI:60.00 (↑ +7.6)" in result
+    assert "ADX:25.00 (→ +3.8)" in result
+    assert "Ichi:☁️↑" in result
+    assert "[40." not in result
+
+
+def test_long_term_ichimoku_uses_calculator_daily_keys(format_utils):
+    formatter = LongTermFormatter(format_utils=format_utils)
+    daily = {
+        "daily_ichimoku_conversion": 101.0,
+        "daily_ichimoku_base": 102.0,
+        "daily_ichimoku_span_a": 103.0,
+        "daily_ichimoku_span_b": 104.0,
+    }
+
+    section = formatter.format_long_term_analysis(daily, current_price=105.0)
+
+    assert "Tenkan: 101.00" in section
+    assert "Kijun: 102.00" in section
+    assert "Cloud Position: Above Cloud (Bullish)" in section
+
+
+def test_td_setup_display_names_the_setup_phase(technical_formatter):
+    assert technical_formatter._format_td_setup({"td_setup": np.array([1.0, 2.0, np.nan])}) == " | TD Setup:2↑"
+    assert technical_formatter._format_td_setup({"td_setup": -9.0}) == " | TD Setup:9↓⚠️"
+    assert technical_formatter._format_td_setup({"td_setup": 0.0}) == ""
+    assert technical_formatter._format_td_setup({"td_setup": None}) == ""
+    assert technical_formatter._format_td_setup({}) == ""

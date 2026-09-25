@@ -79,22 +79,34 @@ def mfi_numba(high, low, close, volume, length=14, drift=1):
 
     pmf_sum = 0.0
     nmf_sum = 0.0
+    active_volume_count = 0
 
     for i in range(1, length):
         pmf_sum += pmf_arr[i]
         nmf_sum += nmf_arr[i]
+        if volume[i] > 0:
+            active_volume_count += 1
 
     for i in range(length, n):
         pmf_sum += pmf_arr[i]
         nmf_sum += nmf_arr[i]
+        if volume[i] > 0:
+            active_volume_count += 1
 
-        if nmf_sum == 0.0:
+        if active_volume_count == 0:
+            pmf_sum = 0.0
+            nmf_sum = 0.0
+        elif pmf_sum <= 0 and nmf_sum <= 0:
+            mfi[i] = np.nan
+        elif nmf_sum <= 0:
             mfi[i] = 100.0
         else:
-            mfi[i] = 100.0 - (100.0 / (1.0 + (pmf_sum / nmf_sum)))
+            mfi[i] = 100.0 * max(0.0, pmf_sum) / (max(0.0, pmf_sum) + nmf_sum)
 
         pmf_sum -= pmf_arr[i - length + 1]
         nmf_sum -= nmf_arr[i - length + 1]
+        if volume[i - length + 1] > 0:
+            active_volume_count -= 1
 
     return mfi
 
@@ -117,30 +129,49 @@ def obv_numba(close, volume, length, initial=1):
     return obv
 
 @njit(cache=True)
-def obv_slope_numba(obv, lookback=10):
-    """Calculate normalized OBV slope over lookback period.
+def net_flow_ratio_numba(close, volume, lookback=10):
+    """Signed volume balance over the lookback window, bounded to -1..1.
 
-    Returns value between -1 and 1 indicating accumulation/distribution trend.
+    Up-candle volume minus down-candle volume divided by the window's total volume;
+    flat candles count only towards the denominator. NaN while no volume traded.
     """
-    n = len(obv)
-    slope = np.zeros(n)
+    n = len(close)
+    ratio = np.full(n, np.nan)
 
-    for i in range(lookback, n):
-        if math.isnan(obv[i]) or math.isnan(obv[i - lookback]):
-            continue
-        obv_change = obv[i] - obv[i - lookback]
-        obv_abs_sum = 0.0
-        count = 0
-        for j in range(i - lookback, i + 1):
-            if not math.isnan(obv[j]):
-                obv_abs_sum += abs(obv[j])
-                count += 1
-        if count > 0:
-            obv_mean = obv_abs_sum / count
-            if obv_mean > 0:
-                slope[i] = obv_change / obv_mean
+    if lookback < 1 or n <= lookback:
+        return ratio
 
-    return slope
+    net_flow = 0.0
+    total_volume = 0.0
+
+    for i in range(1, lookback + 1):
+        diff = close[i] - close[i - 1]
+        if diff > 0:
+            net_flow += volume[i]
+        elif diff < 0:
+            net_flow -= volume[i]
+        total_volume += volume[i]
+
+    ratio[lookback] = net_flow / total_volume if total_volume > 0 else np.nan
+
+    for i in range(lookback + 1, n):
+        diff_out = close[i - lookback] - close[i - lookback - 1]
+        if diff_out > 0:
+            net_flow -= volume[i - lookback]
+        elif diff_out < 0:
+            net_flow += volume[i - lookback]
+        total_volume -= volume[i - lookback]
+
+        diff_in = close[i] - close[i - 1]
+        if diff_in > 0:
+            net_flow += volume[i]
+        elif diff_in < 0:
+            net_flow -= volume[i]
+        total_volume += volume[i]
+
+        ratio[i] = net_flow / total_volume if total_volume > 0 else np.nan
+
+    return ratio
 
 @njit(cache=True)
 def pvt_numba(close, volume, length, drift=1):
@@ -174,20 +205,30 @@ def chaikin_money_flow_numba(high, low, close, volume, length):
 
     mfv_sum = 0.0
     vol_sum = 0.0
+    active_volume_count = 0
 
     for i in range(length - 1):
         mfv_sum += mfv_arr[i]
         vol_sum += volume[i]
+        if volume[i] > 0:
+            active_volume_count += 1
 
     for i in range(length - 1, n):
         mfv_sum += mfv_arr[i]
         vol_sum += volume[i]
+        if volume[i] > 0:
+            active_volume_count += 1
 
-        if vol_sum != 0.0:
+        if active_volume_count == 0:
+            mfv_sum = 0.0
+            vol_sum = 0.0
+        elif vol_sum > 0.0:
             cmf[i] = mfv_sum / vol_sum
 
         mfv_sum -= mfv_arr[i - length + 1]
         vol_sum -= volume[i - length + 1]
+        if volume[i - length + 1] > 0:
+            active_volume_count -= 1
 
     return cmf
 
@@ -296,20 +337,28 @@ def rolling_vwap_numba(high, low, close, volume, length):
     vwap = np.full(n, np.nan)
     tpv_cumsum = 0
     volume_cumsum = 0
+    active_volume_count = 0
 
     for i in range(n):
         tp = (high[i] + low[i] + close[i]) / 3
         tpv = tp * volume[i]
         tpv_cumsum += tpv
         volume_cumsum += volume[i]
+        if volume[i] > 0:
+            active_volume_count += 1
 
         if i >= length:
             old_tp = (high[i-length] + low[i-length] + close[i-length]) / 3
             old_tpv = old_tp * volume[i-length]
             tpv_cumsum -= old_tpv
             volume_cumsum -= volume[i-length]
+            if volume[i-length] > 0:
+                active_volume_count -= 1
 
-        if i >= length - 1 and volume_cumsum != 0:
+        if active_volume_count == 0:
+            tpv_cumsum = 0.0
+            volume_cumsum = 0.0
+        elif i >= length - 1 and volume_cumsum > 0:
             vwap[i] = tpv_cumsum / volume_cumsum
 
     return vwap
