@@ -373,7 +373,7 @@ class TestProcessAnalysisFlow:
                 "atr_percent": 4.2,
                 "macd_line": 2.0,
                 "macd_signal": 1.0,
-                "obv_slope": 0.8,
+                "net_flow_ratio": 0.8,
                 "bb_upper": 100.0,
                 "bb_lower": 80.0,
             },

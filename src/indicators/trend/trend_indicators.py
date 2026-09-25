@@ -258,40 +258,27 @@ def pfe_numba(close, n, m):
 
 
 @njit(cache=True)
-def td_sequential_numba(close, length=9):
-    """
-    Calculate TD Sequential indicator.
-    Returns the count of consecutive higher/lower closes.
-    Positive values indicate bullish counts, negative values indicate bearish counts.
-    Optimization: O(N) forward pass instead of O(N*L) backward nested loop.
+def td_setup_numba(close, length=9):
+    """TD Setup (DeMark setup phase): count of consecutive closes vs close[4].
+
+    Positive counts are bullish runs, negative bearish runs; reaching the length
+    (9) marks potential exhaustion. The DeMark countdown phase is not implemented.
     """
     n = len(close)
     td_seq = np.full(n, np.nan)
+    count = 0
 
     for i in range(4, n):
         c = close[i]
         c4 = close[i - 4]
 
-        prev = td_seq[i - 1]
-        if math.isnan(prev):
-            prev = 0.0
-
         if c > c4:
-            if prev >= 0:
-                val = prev + 1
-            else:
-                val = 1
+            count = max(count, 0) + 1
         elif c < c4:
-            if prev <= 0:
-                val = prev - 1
-            else:
-                val = -1
+            count = min(count, 0) - 1
         else:
-            val = 0.0
+            count = 0
 
-        if abs(val) > length:
-            val = np.sign(val) * length
-
-        td_seq[i] = val
+        td_seq[i] = count if abs(count) <= length else 0
 
     return td_seq

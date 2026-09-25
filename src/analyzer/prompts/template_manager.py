@@ -440,6 +440,26 @@ class TemplateManager:
                 "Death Cross = 50 SMA crosses BELOW 200 SMA (rare, major bearish). "
                 "50>200 / 50<200 = current relationship, NOT a crossover event."
             ),
+            (
+                "- RMI: Relative Momentum Index — Wilder-smoothed RSI over 5-bar momentum changes."
+            ),
+            (
+                "- TD Setup: DeMark setup count of consecutive closes vs close 4 bars back "
+                "(max 9); the DeMark countdown phase is not implemented."
+            ),
+            (
+                "- Net Flow Ratio: net signed volume divided by total volume over the last "
+                "10 candles (ranges -1..1; positive = net buying)."
+            ),
+            (
+                "- Ichimoku cloud: spans are shifted 26 candles back, so the cloud shows where price "
+                "sits now, not a forecast. Ichi:☁️↑ = last closed candle above the cloud, ☁️↓ = below, "
+                "☁️= = inside the cloud."
+            ),
+            (
+                "- Price action shorthand: 4G/0R = 4 green and 0 red candles in the lookback window; "
+                "⚠️ marks a TD Setup of 8 or more, i.e. an exhausted move that often reverses."
+            ),
             "",
         ])
 
@@ -838,7 +858,7 @@ Provide exactly ONE signal. No multi-step signals ("CLOSE then BUY", etc)."""
 
         return response_template
 
-    def build_analysis_steps(self, symbol: str, has_advanced_support_resistance: bool = False,
+    def build_analysis_steps(self, symbol: str, has_retested_support_resistance: bool = False,
                              has_chart_analysis: bool = False,
                              available_periods: dict[str, int] | None = None) -> str:
         """Build analysis steps instructions for the AI model.
@@ -911,9 +931,9 @@ Provide exactly ONE signal. No multi-step signals ("CLOSE then BUY", etc)."""
 
 {step_number}. SYNTHESIS: Regime, winning case, conflict, SL/TP, R/R, confidence, invalidation trigger"""
 
-        if has_advanced_support_resistance:
+        if has_retested_support_resistance:
             analysis_steps += """
-ADVANCED S/R: Volume-weighted pivots with 3+ touches, above-average volume. Only strong levels provided."""
+RETESTED S/R: Confirmed swing lows/highs with at least 3 touches within +/-0.5% of a level over the last 120 candles. A level is not guaranteed to hold; use only the available side(s)."""
 
         return analysis_steps
 

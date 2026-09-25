@@ -250,7 +250,7 @@ def test_build_current_market_context_renders_indicators_and_exit_execution(tmp_
                     "minus_di": 24.2,
                     "macd_line": -268.6,
                     "macd_signal": -28.0,
-                    "obv_slope": -0.7,
+                    "net_flow_ratio": -0.7,
                     "bb_upper": 72140.5,
                     "bb_lower": 68571.7,
                     "current_price": 68795.96,

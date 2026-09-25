@@ -16,6 +16,10 @@ def atr_numba(high, low, close, length=14, mamode="rma", percent=False):
     """Calculate Average True Range with configurable smoothing mode."""
     n = len(high)
     atr = np.full(n, np.nan)
+
+    if n < length:
+        return atr
+
     tr = np.zeros(n)
 
     tr[0] = high[0] - low[0]
@@ -29,29 +33,27 @@ def atr_numba(high, low, close, length=14, mamode="rma", percent=False):
             atr[i] = (1 - alpha) * atr[i - 1] + alpha * tr[i]
 
     elif mamode == "sma":
-        if n >= length:
-            sum_tr = 0.0
-            for i in range(length):
-                sum_tr += tr[i]
-            atr[length - 1] = sum_tr / length
-            for i in range(length, n):
-                sum_tr += tr[i] - tr[i - length]
-                atr[i] = sum_tr / length
+        sum_tr = 0.0
+        for i in range(length):
+            sum_tr += tr[i]
+        atr[length - 1] = sum_tr / length
+        for i in range(length, n):
+            sum_tr += tr[i] - tr[i - length]
+            atr[i] = sum_tr / length
 
     elif mamode == "wma":
         weight_sum = length * (length + 1) / 2
-        if n >= length:
-            current_sum = 0.0
-            current_numerator = 0.0
-            for j in range(length):
-                val = tr[j]
-                current_sum += val
-                current_numerator += val * (j + 1)
-            atr[length - 1] = current_numerator / weight_sum
-            for i in range(length, n):
-                current_numerator += length * tr[i] - current_sum
-                current_sum += tr[i] - tr[i - length]
-                atr[i] = current_numerator / weight_sum
+        current_sum = 0.0
+        current_numerator = 0.0
+        for j in range(length):
+            val = tr[j]
+            current_sum += val
+            current_numerator += val * (j + 1)
+        atr[length - 1] = current_numerator / weight_sum
+        for i in range(length, n):
+            current_numerator += length * tr[i] - current_sum
+            current_sum += tr[i] - tr[i - length]
+            atr[i] = current_numerator / weight_sum
 
     else:
         atr[length - 1] = np.mean(tr[0:length])
@@ -59,7 +61,7 @@ def atr_numba(high, low, close, length=14, mamode="rma", percent=False):
             atr[i] = (atr[i - 1] * (length - 1) + tr[i]) / length
 
     if percent:
-        atr[length:] *= 100 / close[length:]
+        atr[length - 1:] *= 100 / close[length - 1:]
 
     return atr
 
@@ -105,6 +107,12 @@ def chandelier_exit_numba(high, low, close, length, multiplier, mamode="rma"):
 
 @njit(cache=True)
 def ebsw_numba(close, length=40, bars=10):
+    """Even Better Sinewave (Ehlers) oscillator normalized to a wave in [-1, 1].
+
+    The EasyLanguage reference writes both angles in degrees; in radians the
+    high-pass term is sin(2*pi/length) / cos(2*pi/length) and the SuperSmoother
+    cosine is cos(sqrt(2)*pi/bars).
+    """
     n = len(close)
     ebsw = np.full(n, np.nan)
 
@@ -116,11 +124,11 @@ def ebsw_numba(close, length=40, bars=10):
     filter_hist = np.zeros(2)
 
     for i in range(length, n):
-        alpha1 = (1 - np.sin(np.pi * 360 / length)) / np.cos(np.pi * 360 / length)
+        alpha1 = (1 - np.sin(2 * np.pi / length)) / np.cos(2 * np.pi / length)
         hp = 0.5 * (1 + alpha1) * (close[i] - last_close) + alpha1 * last_hp
 
         a1 = np.exp(-np.sqrt(2) * np.pi / bars)
-        b1 = 2 * a1 * np.cos(np.sqrt(2) * np.pi * 180 / bars)
+        b1 = 2 * a1 * np.cos(np.sqrt(2) * np.pi / bars)
         c2 = b1
         c3 = -1 * a1 * a1
         c1 = 1 - c2 - c3

@@ -12,8 +12,24 @@ from src.indicators.overlap import ema_numba
 
 
 @njit(cache=True)
+def _rsi_from_averages(avg_gain: float, avg_loss: float) -> float:
+    """RSI from average gain/loss; a flat window (both zero) is neutral 50."""
+    if avg_loss == 0:
+        if avg_gain == 0:
+            return 50.0
+        return 100.0
+    rs = avg_gain / avg_loss
+    return 100.0 - (100.0 / (1.0 + rs))
+
+
+@njit(cache=True)
 def rsi_numba(close: np.ndarray, length: int) -> np.ndarray:
     n = len(close)
+    rsi = np.full(n, np.nan)
+
+    if n <= length:
+        return rsi
+
     gains = np.zeros(n)
     losses = np.zeros(n)
 
@@ -22,24 +38,14 @@ def rsi_numba(close: np.ndarray, length: int) -> np.ndarray:
         gains[i] = max(0, diff)
         losses[i] = max(0, -diff)
 
-    rsi = np.full(n, np.nan)
     avg_gain = np.sum(gains[1:length + 1]) / length
     avg_loss = np.sum(losses[1:length + 1]) / length
-
-    if avg_loss == 0:
-        rsi[length] = 100
-    else:
-        rs = avg_gain / avg_loss
-        rsi[length] = 100 - (100 / (1 + rs))
+    rsi[length] = _rsi_from_averages(avg_gain, avg_loss)
 
     for i in range(length + 1, n):
         avg_gain = ((avg_gain * (length - 1)) + gains[i]) / length
         avg_loss = ((avg_loss * (length - 1)) + losses[i]) / length
-        if avg_loss == 0:
-            rsi[i] = 100
-        else:
-            rs = avg_gain / avg_loss
-            rsi[i] = 100 - (100 / (1 + rs))
+        rsi[i] = _rsi_from_averages(avg_gain, avg_loss)
 
     return rsi
 
@@ -298,10 +304,11 @@ def tsi_numba(close, long_length, short_length):
 
 @njit(cache=True)
 def rmi_numba(close, length, momentum_length):
+    """Relative Momentum Index: Wilder-smoothed RSI over momentum_length-bar momentum changes."""
     n = len(close)
     rmi = np.full(n, np.nan)
 
-    if n <= momentum_length:
+    if n < length + momentum_length:
         return rmi
 
     momentum = np.zeros(n - momentum_length)
@@ -311,32 +318,14 @@ def rmi_numba(close, length, momentum_length):
     up = np.maximum(momentum, 0)
     down = np.maximum(-momentum, 0)
 
-    m_len = len(momentum)
-    if m_len < length:
-        return rmi
+    avg_up = np.sum(up[:length]) / length
+    avg_down = np.sum(down[:length]) / length
+    rmi[length + momentum_length - 1] = _rsi_from_averages(avg_up, avg_down)
 
-    sum_up = 0.0
-    sum_down = 0.0
-
-    for i in range(length - 1):
-        sum_up += up[i]
-        sum_down += down[i]
-
-    for i in range(length - 1, m_len):
-        sum_up += up[i]
-        sum_down += down[i]
-
-        avg_up = sum_up / length
-        avg_down = sum_down / length
-
-        if avg_down == 0:
-            rmi[i + momentum_length] = 100
-        else:
-            rs = avg_up / avg_down
-            rmi[i + momentum_length] = 100 - (100 / (1 + rs))
-
-        sum_up -= up[i - length + 1]
-        sum_down -= down[i - length + 1]
+    for i in range(length, len(momentum)):
+        avg_up = ((avg_up * (length - 1)) + up[i]) / length
+        avg_down = ((avg_down * (length - 1)) + down[i]) / length
+        rmi[i + momentum_length] = _rsi_from_averages(avg_up, avg_down)
 
     return rmi
 
@@ -359,8 +348,14 @@ def coppock_curve_numba(close, wl1=14, wl2=11, wma_length=10):
     roc_long = roc_numba(close, wl1)
     roc_short = roc_numba(close, wl2)
     coppock_arr = roc_long + roc_short
-    ewma_coppock = ema_numba(coppock_arr, wma_length)
-    return ewma_coppock
+    coppock = np.full(len(close), np.nan)
+    weight_sum = wma_length * (wma_length + 1) / 2
+    for i in range(max(wl1, wl2) + wma_length - 1, len(close)):
+        weighted_sum = 0.0
+        for j in range(wma_length):
+            weighted_sum += (j + 1) * coppock_arr[i - wma_length + j + 1]
+        coppock[i] = weighted_sum / weight_sum
+    return coppock
 
 @njit(cache=True)
 def detect_rsi_divergence(close_prices, rsi_values, length=14):

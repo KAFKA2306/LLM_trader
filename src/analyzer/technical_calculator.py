@@ -54,7 +54,7 @@ class TechnicalCalculator:
             "twap": self.ti.twap(length=20),
             "mfi": self.ti.mfi(length=14),
             "obv": self.ti.obv(length=20),
-            "obv_slope": self.ti.obv_slope(length=20, lookback=10),
+            "net_flow_ratio": self.ti.net_flow_ratio(lookback=10),
             "cmf": self.ti.chaikin_money_flow(length=20),
             "force_index": self.ti.force_index(length=20),
             "cci": self.ti.cci(length=14),
@@ -134,7 +134,7 @@ class TechnicalCalculator:
             "minus_di": minus_di,
             "trix": self.ti.trix(length=20),
             "pfe": self.ti.pfe(n=20, m=5),
-            "td_sequential": self.ti.td_sequential(length=9),
+            "td_setup": self.ti.td_setup(length=9),
             "sar": self.ti.parabolic_sar(step=0.02, max_step=0.2),
         }
 
@@ -178,15 +178,13 @@ class TechnicalCalculator:
         indicators["basic_support"] = support
         indicators["basic_resistance"] = resistance
 
-        adv_support, adv_resistance = self.ti.advanced_support_resistance(
-            length=20,
-            strength_threshold=1,
-            persistence=1,
-            volume_factor=1.5,
-            price_factor=0.004
+        retested_support, retested_resistance = self.ti.retested_support_resistance(
+            length=120,
+            min_touches=3,
+            price_tolerance=0.005
         )
-        indicators["advanced_support"] = adv_support
-        indicators["advanced_resistance"] = adv_resistance
+        indicators["retested_support"] = retested_support
+        indicators["retested_resistance"] = retested_resistance
 
         pivot_point, r1, r2, r3, r4, s1, s2, s3, s4 = self.ti.pivot_points()
         indicators["pivot_point"] = pivot_point

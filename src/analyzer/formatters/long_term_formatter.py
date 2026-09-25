@@ -156,17 +156,17 @@ class LongTermFormatter:
         """Format Ichimoku cloud analysis."""
         ichimoku_items = []
 
-        if "ichimoku_tenkan" in long_term_data:
-            tenkan = long_term_data["ichimoku_tenkan"]
+        if "daily_ichimoku_conversion" in long_term_data:
+            tenkan = long_term_data["daily_ichimoku_conversion"]
             ichimoku_items.append(f"Tenkan: {self.format_utils.fmt(tenkan)}")
 
-        if "ichimoku_kijun" in long_term_data:
-            kijun = long_term_data["ichimoku_kijun"]
+        if "daily_ichimoku_base" in long_term_data:
+            kijun = long_term_data["daily_ichimoku_base"]
             ichimoku_items.append(f"Kijun: {self.format_utils.fmt(kijun)}")
 
-        if "ichimoku_span_a" in long_term_data and "ichimoku_span_b" in long_term_data:
-            span_a = long_term_data["ichimoku_span_a"]
-            span_b = long_term_data["ichimoku_span_b"]
+        if "daily_ichimoku_span_a" in long_term_data and "daily_ichimoku_span_b" in long_term_data:
+            span_a = long_term_data["daily_ichimoku_span_a"]
+            span_b = long_term_data["daily_ichimoku_span_b"]
             cloud_top = max(span_a, span_b)
             cloud_bottom = min(span_a, span_b)
 

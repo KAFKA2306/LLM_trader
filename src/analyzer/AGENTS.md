@@ -122,8 +122,8 @@ The `PromptBuilder` composes the system prompt from these sections:
 | **Volume** | VWAP, TWAP, MFI, OBV, CMF, Force Index, CCI, PVT, A/D Line |
 | **Momentum** | RSI (14), Stochastic (14,3,3), Williams %R, UO, TSI, RMI, PPO, Coppock, KST, ROC, MACD (12,26,9) |
 | **Volatility** | ATR (20), Bollinger Bands (20,2), %B, Keltner (20,2), Donchian (20), Chandelier Exit (20,3), Choppiness (14) |
-| **Trend** | ADX (14), +DI/-DI, TRIX, PFE, TD Sequential, Parabolic SAR, Supertrend (20,3), Ichimoku (9,26,52), Vortex, SMAs (20/50/200) |
-| **S/R** | Kurtosis, Z-score, Hurst, Entropy, Skewness, Variance, LinReg slope/r², basic S/R, advanced S/R, Pivot Points, Fibonacci Pivots |
+| **Trend** | ADX (14), +DI/-DI, TRIX, PFE, TD Setup, Parabolic SAR, Supertrend (20,3), Ichimoku (9,26,52), Vortex, SMAs (20/50/200) |
+| **S/R** | Kurtosis, Z-score, Hurst, Entropy, Skewness, Variance, LinReg slope/r², rolling S/R, retested S/R (3+ confirmed swing touches within +/-0.5% over 120 candles), Pivot Points, Fibonacci Pivots |
 
 **Weekly Macro** uses 200W SMA methodology: 5 bullish/bearish criteria scored for cycle phase confidence.
 

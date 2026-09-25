@@ -21,7 +21,7 @@ LLM Trader does **not** use TA-Lib or pandas-ta. Every indicator is implemented 
 |---------|--------|-------------|
 | **Dependencies** | C library, platform-specific builds, `.dll`/`.so` hell | Pure Python + Numba (already a dependency) |
 | **Multi-timeframe isolation** | Single global state | `TechnicalCalculator` creates fresh `TechnicalIndicators` instances per timeframe |
-| **NaN handling** | Inconsistent per indicator | Uniform: pre-fill with `np.nan`, first valid at index `length` |
+| **NaN handling** | Inconsistent per indicator | Pre-fill with `np.nan`; first valid index per indicator: rolling windows at `length - 1`, Wilder-seeded RSI at `length`, RMI at `length + momentum - 1`, MACD line at `slow - 1` (signal/histogram at `slow`), TRIX at `length + drift`, Hurst at `max_lag + 2`. MACD/TRIX warm-up bars differ from TA-Lib; mature values match. |
 | **Rolling window bugs** | None | Several found and fixed: CCI O(N×L)→O(N), stochastic NaN bleed-through, MACD 0.0 sentinel |
 | **Customization** | Fork or wrapper layer | Direct: `@njit` your own variant alongside originals |
 | **Modularity** | One giant DLL | 9 category modules, tree-shakeable imports |
@@ -109,17 +109,17 @@ Key rules:
 #### Indicator Inventory (Complete)
 
 ##### Momentum (14 functions)
-RSI, MACD (line/signal/histogram), Stochastic (%K/%D), ROC, Momentum, Williams %R, TSI, RMI, PPO, Coppock Curve, Ultimate Oscillator, KST, Relative Strength calculation, RSI divergence detection
+RSI, MACD (line/signal/histogram), Stochastic (%K/%D), ROC, Momentum, Williams %R, TSI, RMI (Wilder-smoothed RSI over momentum changes), PPO, Coppock Curve, Ultimate Oscillator, KST, Relative Strength calculation, RSI divergence detection
 
 ##### Trend (8 functions + 12 utility functions)
-ADX (+DI/-DI), Supertrend, Ichimoku Cloud (tenkan/kijun/senkou/chikou), Parabolic SAR, Vortex (+VI/-VI), TRIX, PFE, TD Sequential (setup/countdown)
+ADX (+DI/-DI), Supertrend, Ichimoku Cloud (tenkan/kijun/senkou/chikou), Parabolic SAR, Vortex (+VI/-VI), TRIX, PFE, TD Setup (DeMark setup phase only; countdown not implemented)
 
 **Utility files:**
 - `trend/trend_calculation_utils.py` — true range, ATR helper, directional movement, rolling true range sum
 - `trend/sar_utils.py` — acceleration factor logic, SAR point stepping
 
 ##### Volume (13 functions)
-MFI, OBV, OBV Slope, PVT, Chaikin Money Flow, Accumulation/Distribution Line, Force Index, Ease of Movement, Volume Profile, Rolling VWAP, TWAP, Average Quote Volume, CCI
+MFI, OBV, Net Flow Ratio (signed volume balance over the lookback window), PVT, Chaikin Money Flow, Accumulation/Distribution Line, Force Index, Ease of Movement, Volume Profile, Rolling VWAP, TWAP, Average Quote Volume, CCI
 
 ##### Volatility (8 functions)
 ATR, Bollinger Bands (upper/lower/%B/width), Chandelier Exit (long/short), VHF, EBSW, Keltner Channels (upper/lower), Donchian Channels (upper/lower), Choppiness Index
@@ -131,8 +131,8 @@ Kurtosis, Skewness, Standard Deviation, Variance, Z-Score, MAD, Quantile, Entrop
 - `statistical/utils/correlation_analysis.py` — 4 functions: autocorrelation, rolling correlation, cross-correlation, Spearman rank
 - `statistical/utils/dsp_filters.py` — 2 functions: low-pass filter, high-pass filter (basic IIR-style)
 
-##### Support/Resistance (9 functions)
-Support & Resistance (basic), Find S/R (swing-point based), Advanced S/R (cluster detection), Pivot Points (classic), Fibonacci Pivot Points, Fibonacci Retracement, Floating Levels, Fibonacci Bollinger Bands
+##### Support/Resistance (8 functions)
+Support & Resistance (rolling range), Retested S/R (confirmed swing lows/highs, 3+ touches within +/-0.5% over 120 candles), Find S/R (nearest levels from supplied arrays), Pivot Points (classic), Fibonacci Pivot Points, Fibonacci Retracement, Floating Levels, Fibonacci Bollinger Bands
 
 ##### Overlap (3 functions)
 SMA, EMA, EWMA (all support array inputs for vectorized calculation)

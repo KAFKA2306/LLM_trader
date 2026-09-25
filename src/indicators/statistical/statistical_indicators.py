@@ -65,8 +65,8 @@ def kurtosis_numba(arr, length):
     length_reciprocal = 1.0 / length
 
     n_val = float(length)
-    factor1 = (n_val * (n_val + 1)) / ((n_val - 1) * (n_val - 2) * (n_val - 3))
-    factor2 = 3 * (n_val - 1) / ((n_val - 2) * (n_val - 3))
+    factor1 = (n_val + 1) * (n_val - 1) / (n_val * (n_val - 2) * (n_val - 3))
+    factor2 = 3 * (n_val - 1) ** 2 / ((n_val - 2) * (n_val - 3))
 
     offset = arr[0]
     s1 = 0.0
@@ -325,7 +325,11 @@ def quantile_numba(close, length=30, q=0.5):
 
 @njit(cache=True)
 def entropy_numba(close, length=10, base=2.0):
-    """O(N) Price Entropy using sliding window sums."""
+    """
+    O(N) Shannon entropy (default base 2) of the window's normalized prices
+    p_i = x_i / sum(x): H = -sum(p_i * log(p_i)); a flat window yields
+    log2(length) and a constant price scale factor cancels out.
+    """
     n = len(close)
     entropy = np.full(n, np.nan)
 
@@ -370,6 +374,14 @@ def entropy_numba(close, length=10, base=2.0):
 
 @njit(cache=True)
 def hurst_numba(ts: np.ndarray, max_lag: int = 20) -> np.ndarray:
+    """
+    Hurst exponent from the log-log slope of the structure function
+    tau(lag) = sqrt(mean((ts[j] - ts[j - lag])**2)) over lags 2..max_lag - 1.
+
+    Expanding-window estimate: each value uses only the bars up to that index
+    (first finite at max_lag + 2); ~0.5 random walk, >0.5 trending, <0.5
+    mean-reverting.
+    """
     n = len(ts)
     hurst_values = np.full(n, np.nan, dtype=np.float64)
 

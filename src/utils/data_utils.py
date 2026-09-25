@@ -47,9 +47,7 @@ def get_last_valid_value(
 def last_or_scalar(value: Any) -> Any:
     """Return the last element of a sized value (array/list), or the value itself.
 
-    Advanced support/resistance indicators arrive either as arrays — take the
-    latest reading — or as plain scalars. NaN/empty values are passed through
-    untouched so callers keep their own validity checks.
+    Empty values are passed through so callers keep their own validity checks.
     """
     if isinstance(value, (int, float)):
         return value

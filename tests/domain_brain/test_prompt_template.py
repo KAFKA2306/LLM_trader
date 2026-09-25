@@ -312,6 +312,17 @@ def test_system_prompt_renders_mandated_sections():
         ("- SMA crossovers: Golden Cross = 50 SMA crosses ABOVE 200 SMA (rare, major "
         "bullish); Death Cross = 50 SMA crosses BELOW 200 SMA (rare, major bearish)."),
         "50>200 / 50<200 = current relationship, NOT a crossover event.",
+        ("- RMI: Relative Momentum Index — Wilder-smoothed RSI over 5-bar momentum "
+        "changes."),
+        ("- TD Setup: DeMark setup count of consecutive closes vs close 4 bars back "
+        "(max 9); the DeMark countdown phase is not implemented."),
+        ("- Net Flow Ratio: net signed volume divided by total volume over the last "
+        "10 candles (ranges -1..1; positive = net buying)."),
+        ("- Ichimoku cloud: spans are shifted 26 candles back, so the cloud shows where price "
+        "sits now, not a forecast. Ichi:☁️↑ = last closed candle above the cloud, ☁️↓ = below, "
+        "☁️= = inside the cloud."),
+        ("- Price action shorthand: 4G/0R = 4 green and 0 red candles in the lookback window; "
+        "⚠️ marks a TD Setup of 8 or more, i.e. an exhausted move that often reverses."),
         "## Profit Maximization Strategy",
         "- LET TRADES BREATHE: Do NOT tighten stops prematurely.",
         "Premature tightening is the #1 cause of losing trades.",
@@ -1113,7 +1124,7 @@ def test_previous_response_continuation_contract(previous_response, expected, fo
          "invalidation trigger"),
          "   - Compare performance relative to BTC (correlation/divergence)",
      ], ["Section 2.5", "Section 3.5", "\n | Fear & Greed",
-         "- Compare performance relative to ETH if relevant", "ADVANCED S/R:"]),
+         "- Compare performance relative to ETH if relevant", "RETESTED S/R:"]),
     ("BTC/USDT", {}, {}, [
         DECISION_GATE,
         ("Analyze the provided Multi-Timeframe Price Summary periods (dynamically "
@@ -1121,15 +1132,15 @@ def test_previous_response_continuation_contract(previous_response, expected, fo
         "7. STATISTICAL: Z-Score (extremes revert), Hurst (>0.5 trending), volatility",
         "8. SYNTHESIS:",
         "   - Compare performance relative to ETH if relevant",
-    ], ["8. CHART", "- Compare performance relative to BTC", "ADVANCED S/R:"]),
-    ("SOL/USDT", {}, {"has_advanced_support_resistance": True}, [
+    ], ["8. CHART", "- Compare performance relative to BTC", "RETESTED S/R:"]),
+    ("SOL/USDT", {}, {"has_retested_support_resistance": True}, [
         DECISION_GATE,
-        ("ADVANCED S/R: Volume-weighted pivots with 3+ touches, above-average volume. "
-        "Only strong levels provided."),
+        ("RETESTED S/R: Confirmed swing lows/highs with at least 3 touches within +/-0.5% "
+         "of a level over the last 120 candles. A level is not guaranteed to hold; use only the available side(s)."),
         "   - Compare performance relative to BTC (correlation/divergence)",
         "   - Compare performance relative to ETH if relevant",
     ], ["8. CHART"]),
-], ids=["eth-with-chart-and-periods", "btc-default", "sol-advanced-sr"])
+], ids=["eth-with-chart-and-periods", "btc-default", "sol-retested-sr"])
 def test_analysis_steps_matrix(symbol, config_overrides, kwargs, expected, forbidden):
     """Steps get renumbered by the optional chart block; asset-relative lines are dynamic."""
     manager = make_manager(make_config(**config_overrides))
