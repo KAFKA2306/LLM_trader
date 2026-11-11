@@ -10,7 +10,6 @@ import hashlib
 import json
 import math
 from pathlib import Path
-from statistics import median
 
 
 REQUIRED_KEYS = ("venue", "symbol", "event_id", "exchange_ts_ns")
@@ -86,7 +85,6 @@ def calibrate(
     if coverage < min_coverage:
         raise EvidenceError(f"overlap coverage {coverage:.4f} below {min_coverage:.4f}")
     delays_ms.sort()
-    med = median(delays_ms)
     return {
         "status": "CALIBRATED_OBSERVATION",
         "scope": "observed feed reception delay; not a trading backtest or profit claim",
