@@ -47,9 +47,17 @@ class ProvenanceReplay:
                 raise BookEvidenceError(f"event {index} must be a mapping")
             if event.get("venue") != self.venue or event.get("symbol") != self.symbol:
                 raise BookEvidenceError(f"mixed venue/symbol at event {index}: replay rejected")
-        # Deep-copy verified inputs once; caller mutation cannot alter replay state.
-        self._events = copy.deepcopy(events)
-        self.book = DiffDepthBook(copy.deepcopy(snapshot))
+        # Validate the complete frozen sequence before exposing a replayable book.
+        frozen_snapshot = copy.deepcopy(snapshot)
+        frozen_events = copy.deepcopy(events)
+        preflight = DiffDepthBook(copy.deepcopy(frozen_snapshot))
+        for index, event in enumerate(frozen_events):
+            try:
+                preflight.apply(event)
+            except (BookEvidenceError, KeyError, TypeError) as exc:
+                raise BookEvidenceError(f"invalid replay event {index}: {exc}") from exc
+        self._events = frozen_events
+        self.book = DiffDepthBook(frozen_snapshot)
         self._cursor = 0
 
     def step(self):

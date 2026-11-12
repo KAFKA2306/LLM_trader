@@ -47,6 +47,22 @@ class ProvenanceTest(unittest.TestCase):
         self.assertEqual(tuple(map(str, replay.top())), ("100", "101"))
         self.assertEqual(replay.book.last_id, 101)
 
+    def test_late_gap_rejected_before_any_replay(self):
+        manifest, snapshot, events = self.setup_case()
+        events.append({"venue": "binance-spot", "symbol": "BTCUSDT",
+                       "U": 103, "u": 103, "b": [], "a": []})
+        manifest = make_manifest("binance-spot", "BTCUSDT", "synthetic-fixture-v1", snapshot, events)
+        with self.assertRaisesRegex(BookEvidenceError, "invalid replay event 1"):
+            ProvenanceReplay(manifest, snapshot, events)
+
+    def test_late_crossed_book_rejected_before_any_replay(self):
+        manifest, snapshot, events = self.setup_case()
+        events.append({"venue": "binance-spot", "symbol": "BTCUSDT",
+                       "U": 102, "u": 102, "b": [["102", "1"]], "a": []})
+        manifest = make_manifest("binance-spot", "BTCUSDT", "synthetic-fixture-v1", snapshot, events)
+        with self.assertRaisesRegex(BookEvidenceError, "invalid replay event 1"):
+            ProvenanceReplay(manifest, snapshot, events)
+
 
 if __name__ == "__main__":
     unittest.main()
