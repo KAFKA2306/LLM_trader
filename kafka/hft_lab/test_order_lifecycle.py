@@ -50,6 +50,15 @@ class CancelTimelineTest(unittest.TestCase):
                 **params, cancel_delay_ns_grid=[0, -1],
                 max_live_exposure_ns=30)
 
+    def test_pending_acceptance_cannot_be_allowed(self):
+        from order_lifecycle import hypothetical_cancel_risk_gate
+        result = hypothetical_cancel_risk_gate(
+            submit_ts_ns=100, accept_delay_ns=50,
+            cancel_ts_ns=150, cancel_delay_ns_grid=[0, 10],
+            observation_ts_ns=120, max_live_exposure_ns=100)
+        self.assertEqual(result["decision"], "STOP")
+        self.assertEqual(result["reasons"], ["ACCEPTANCE_PENDING_AT_OBSERVATION"])
+
     def test_cancel_delay_grid_bounds_and_fail_closed(self):
         from order_lifecycle import hypothetical_cancel_delay_sensitivity
         params = dict(submit_ts_ns=100, accept_delay_ns=10,
