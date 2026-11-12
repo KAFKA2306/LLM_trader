@@ -31,6 +31,25 @@ class CancelTimelineTest(unittest.TestCase):
             with self.subTest(case=case), self.assertRaises(BookEvidenceError):
                 hypothetical_cancel_timeline(**case)
 
+    def test_conservative_risk_gate_checks_worst_case_and_live_state(self):
+        from order_lifecycle import hypothetical_cancel_risk_gate
+        params = dict(submit_ts_ns=100, accept_delay_ns=10,
+                      cancel_ts_ns=120, observation_ts_ns=145)
+        safe = hypothetical_cancel_risk_gate(
+            **params, cancel_delay_ns_grid=[0, 20],
+            max_live_exposure_ns=30)
+        self.assertEqual(safe["decision"], "ALLOW")
+        unsafe = hypothetical_cancel_risk_gate(
+            **params, cancel_delay_ns_grid=[0, 20, 40],
+            max_live_exposure_ns=30)
+        self.assertEqual(unsafe["decision"], "STOP")
+        self.assertEqual(unsafe["reasons"],
+                         ["EXPOSURE_LIMIT_EXCEEDED", "POSSIBLY_LIVE_AT_OBSERVATION"])
+        with self.assertRaises(BookEvidenceError):
+            hypothetical_cancel_risk_gate(
+                **params, cancel_delay_ns_grid=[0, -1],
+                max_live_exposure_ns=30)
+
     def test_cancel_delay_grid_bounds_and_fail_closed(self):
         from order_lifecycle import hypothetical_cancel_delay_sensitivity
         params = dict(submit_ts_ns=100, accept_delay_ns=10,
