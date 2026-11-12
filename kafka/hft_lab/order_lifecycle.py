@@ -53,3 +53,40 @@ def hypothetical_cancel_timeline(*, submit_ts_ns, accept_delay_ns,
         "fill_status": "NOT_MODELED",
         "assumptions": "zero fills assumed for state illustration; no queue, acknowledgement, exchange cancellation or realized PnL",
     }
+
+
+def hypothetical_cancel_delay_sensitivity(*, submit_ts_ns, accept_delay_ns,
+                                          cancel_ts_ns, cancel_delay_ns_grid,
+                                          observation_ts_ns):
+    """Evaluate an explicit finite delay grid, not a probability distribution.
+
+    The caller declares every delay. Reject the whole grid if any scenario
+    is invalid; never silently drop an adverse case. No fill is modeled.
+    """
+    if not isinstance(cancel_delay_ns_grid, (tuple, list)) or not cancel_delay_ns_grid:
+        raise BookEvidenceError("nonempty delay grid required")
+    if len(cancel_delay_ns_grid) > 256:
+        raise BookEvidenceError("delay grid exceeds 256 scenarios")
+    if len(set(map(str, cancel_delay_ns_grid))) != len(cancel_delay_ns_grid):
+        raise BookEvidenceError("duplicate delays in grid")
+    scenarios = []
+    for delay in cancel_delay_ns_grid:
+        result = hypothetical_cancel_timeline(
+            submit_ts_ns=submit_ts_ns, accept_delay_ns=accept_delay_ns,
+            cancel_ts_ns=cancel_ts_ns, cancel_delay_ns=delay,
+            observation_ts_ns=observation_ts_ns)
+        scenarios.append({"cancel_delay_ns": delay, "state": result["state"],
+                          "cancel_effective_ts_ns": result["cancel_effective_ts_ns"],
+                          "fill_status": result["fill_status"]})
+    effective = [s["cancel_effective_ts_ns"] for s in scenarios]
+    accepted = _ns(submit_ts_ns, "submit_ts_ns") + _ns(accept_delay_ns, "accept_delay_ns")
+    return {
+        "status": "HYPOTHETICAL_ONLY",
+        "scenarios": scenarios,
+        "earliest_cancel_effective_ts_ns": min(effective),
+        "latest_cancel_effective_ts_ns": max(effective),
+        "min_live_exposure_ns": min(effective) - accepted,
+        "max_live_exposure_ns": max(effective) - accepted,
+        "fill_status": "NOT_MODELED",
+        "assumptions": "declared finite delay grid, no probabilities, queue or fills",
+    }

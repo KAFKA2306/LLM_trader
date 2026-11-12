@@ -31,6 +31,22 @@ class CancelTimelineTest(unittest.TestCase):
             with self.subTest(case=case), self.assertRaises(BookEvidenceError):
                 hypothetical_cancel_timeline(**case)
 
+    def test_cancel_delay_grid_bounds_and_fail_closed(self):
+        from order_lifecycle import hypothetical_cancel_delay_sensitivity
+        params = dict(submit_ts_ns=100, accept_delay_ns=10,
+                      cancel_ts_ns=120, observation_ts_ns=145)
+        r = hypothetical_cancel_delay_sensitivity(
+            **params, cancel_delay_ns_grid=[0, 20, 40])
+        self.assertEqual([s["state"] for s in r["scenarios"]],
+                         ["CANCELLED_UNFILLED_ASSUMPTION",
+                          "CANCELLED_UNFILLED_ASSUMPTION",
+                          "LIVE_UNFILLED_ASSUMPTION"])
+        self.assertEqual((r["min_live_exposure_ns"], r["max_live_exposure_ns"]), (10, 50))
+        self.assertEqual(r["fill_status"], "NOT_MODELED")
+        for grid in ([], [0, -1], [0, True], [0, 0], [0] * 257):
+            with self.subTest(grid=grid), self.assertRaises(BookEvidenceError):
+                hypothetical_cancel_delay_sensitivity(**params, cancel_delay_ns_grid=grid)
+
 
 if __name__ == "__main__":
     unittest.main()
