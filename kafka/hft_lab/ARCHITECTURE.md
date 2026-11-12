@@ -41,3 +41,11 @@ Before: `DiffDepthBook.apply` raised on a missing update ID but left the instanc
 After: a sequence gap permanently sets `needs_resnapshot` on that instance. All subsequent `apply` and `top` calls reject until the caller constructs a new `DiffDepthBook` from a fresh snapshot. The last committed book state remains internally unchanged, but cannot be presented as current. Invalid decimal/crossed updates remain atomic and may be corrected without poisoning continuity, because the input is rejected before the state advances. This is a fail-closed software contract, not a claim of exchange correctness.
 
 Acceptance: three local focused contract tests passed, including gap -> rejected recovery -> rejected read -> new snapshot success, and `py_compile` passed. No benchmark speedup is claimed; this change intentionally prioritizes safety over runtime. Rollback parent: `88f701c8b42d6e094541280009f8147277c62bc6`.
+
+## 2026-11-12 20:14 JST: frozen replay provenance boundary
+
+Before: `DiffDepthBook` validated update continuity but did not bind the snapshot and diff sequence to a declared venue/symbol or frozen input. A caller could accidentally mix feeds or modify the input between construction and replay.
+
+After: `replay_provenance.py` adds a minimal offline `ProvenanceReplay` wrapper. It requires a schema version, exact venue/symbol/source labels and SHA-256 of snapshot and ordered events. It checks each event's venue/symbol and rechecks event-list integrity before each state transition. Mismatches fail before mutating the book. This is a *declared* provenance contract, not cryptographic authenticity, vendor equivalence or permission verification. For large real feeds, an immutable streaming manifest/verified chunk design will be required rather than hashing the whole event list per step.
+
+Acceptance: three fixture tests for frozen replay, mixed symbol, snapshot mismatch and post-validation mutation; existing book contracts remain required. No claim of real exchange data, speedup or trading returns. Rollback parent: `3b61116444ef7f1e0716d24b97cb65940f52feeb`.
