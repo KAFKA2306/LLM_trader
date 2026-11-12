@@ -107,11 +107,14 @@ def hypothetical_cancel_risk_gate(*, submit_ts_ns, accept_delay_ns,
     breached = sensitivity["max_live_exposure_ns"] > cap
     still_live = any(s["state"] == "LIVE_UNFILLED_ASSUMPTION"
                      for s in sensitivity["scenarios"])
+    pending_accept = any(s["state"] == "PENDING_ACCEPT"
+                         for s in sensitivity["scenarios"])
     return {
         "status": "HYPOTHETICAL_ONLY",
-        "decision": "STOP" if breached or still_live else "ALLOW",
+        "decision": "STOP" if breached or still_live or pending_accept else "ALLOW",
         "reasons": (["EXPOSURE_LIMIT_EXCEEDED"] if breached else [])
-                   + (["POSSIBLY_LIVE_AT_OBSERVATION"] if still_live else []),
+                   + (["POSSIBLY_LIVE_AT_OBSERVATION"] if still_live else [])
+                   + (["ACCEPTANCE_PENDING_AT_OBSERVATION"] if pending_accept else []),
         "max_live_exposure_ns": sensitivity["max_live_exposure_ns"],
         "max_allowed_live_exposure_ns": cap,
         "fill_status": "NOT_MODELED",
