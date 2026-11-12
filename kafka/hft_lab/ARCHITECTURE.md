@@ -21,3 +21,15 @@ Expected testable effect: identical fixtures reconstruct identical best bid/ask;
 Official reference (reviewed 2026-11-12): https://github.com/binance/binance-spot-api-docs/blob/master/web-socket-streams.md (How to manage a local order book correctly).
 
 Next independent design increment: explicit replay event provenance/sequence manifest and snapshot-to-diff input validation, then bounded, clearly assumed order/fee scenarios. No live trading, private feed, paid API, or claim of observed performance.
+
+## 2026-11-12: ISUCON-style bare/lite evaluation loop
+
+Source (reviewed 2026-11-12): https://zenn.dev/luvtechno/articles/isucon2026-preparation
+
+Before: the depth replay implementation had fixture correctness tests but no frozen repeated performance-evaluation contract. One fast run could be mistaken for progress.
+
+After: `replay_benchmark.py` is a single-process, dependency-free evaluation harness over a generated fixed L2 case. It records the fixture SHA-256, full final-book-state hash, Python/platform fingerprint, all cold-run timing samples and median. A new book is created for each attempt. `compare` fails closed when input case, runtime fingerprint or final book state differs. Improvements smaller than measured run-to-run spread are `INCONCLUSIVE_WITHIN_VARIATION`; larger differences are only candidates for independent replication, never automatic adoption.
+
+ISUCON lessons applied: (1) freeze the before/after workload, (2) repeat measurements instead of selecting peak scores, (3) validate the evaluator and restart state, (4) prefer bare/lite tools to a heavy agent harness, (5) retain a known-good revision and a concise handoff. The heuristic noise threshold is not statistical confidence; host load may differ even with an identical fingerprint. Synthetic input is only software/performance evidence, not exchange throughput or trading profitability.
+
+Acceptance: three local evaluator contract tests passed and Python compilation passed on 2026-11-12. An unchanged-code before/after comparison with identical fixture produced `INCONCLUSIVE_WITHIN_VARIATION` as expected. Further work should vary replay shapes with frozen, independently checked fixtures before performance tuning.

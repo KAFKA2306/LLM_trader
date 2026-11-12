@@ -52,3 +52,17 @@ The calibration is not a backtest. A later, separately verified backtester must 
 The external hourly research automation, not a new GitHub Actions workflow, owns this cadence. Every invocation must (1) read canonical `master` and this ledger, (2) avoid duplicate experiments, (3) choose one independently executable code/data/replay verification, (4) run only relevant tests and verify exact output, (5) record reproducible new evidence in the existing `kafka/research/experiments/` ledger, and (6) stop at `FIXED_POINT` when no independent work remains. Do **not** repeat requests for the excluded private live-host inputs. Cross-bot findings may be linked from the central `investor` knowledge base only after independent validation.
 
 Do not enable exchange credentials, live trading, deployment, secret access or an external paid data source from the research loop. Risk controls remain deterministic and independent of the LLM.
+
+## Repeatable replay evaluation (ISUCON-style)
+
+The lightweight benchmark in `replay_benchmark.py` compares repeated cold replay timings without a daemon, database or new CI workflow. The input is **synthetic**; do not interpret its results as market or trading results. Reference: https://zenn.dev/luvtechno/articles/isucon2026-preparation
+
+```sh
+python kafka/hft_lab/replay_benchmark.py run --revision BASE_SHA --events 2000 --levels 50 --repeats 7 --output /tmp/hft-before.json
+# Run the candidate revision with the SAME flags and on the SAME machine.
+python kafka/hft_lab/replay_benchmark.py run --revision CANDIDATE_SHA --events 2000 --levels 50 --repeats 7 --output /tmp/hft-after.json
+python kafka/hft_lab/replay_benchmark.py compare --before /tmp/hft-before.json --after /tmp/hft-after.json
+python -m unittest discover -s kafka/hft_lab -p 'test_*.py'
+```
+
+Do not use the fastest sample. Compare identical fixture hashes, Python/runtime fingerprints, final book-state hashes, medians and within-run spread. A speedup flag requests independent replication; it does not promote a strategy or prove improvement in real market throughput.
