@@ -121,3 +121,9 @@ Acceptance fixture: submit 100, accept 110, cancel request 120, observation 145 
 ## 2026-11-13 06:14 JST: fail-closed pending acceptance in cancel risk gate
 
 Before: the gate returned ALLOW when observation preceded order acceptance, provided the modeled future exposure stayed within the cap. This incorrectly treated an unresolved pending order as safe. After: any PENDING_ACCEPT scenario returns STOP with ACCEPTANCE_PENDING_AT_OBSERVATION; existing live/exposure rules remain. Acceptance: synthetic submit=100, acceptance=150, observation=120, cancel request=150, delays [0,10], cap=100 must STOP. This is a correctness change only, no runtime or market-performance claim. Rollback parent: 44d5c35a2624067e34b066a9eac117ca35fcef38. Exact repository test execution: UNVERIFIED until run.
+
+## 2026-11-13 07:14 JST: joint acceptance/cancellation jitter gate
+
+Before: the cancellation risk gate held acceptance delay fixed; a pending-acceptance scenario caused by acceptance jitter could be missed. After: `hypothetical_acceptance_jitter_gate` evaluates the bounded Cartesian product of declared acceptance and cancellation delays (maximum 256 combinations) using the existing conservative gate. Any STOP yields STOP, and an invalid/ambiguous combination rejects the entire evaluation. The result is a hypothetical decision, not a fill or exchange safety guarantee.
+
+Acceptance: fixed fixture submit=100, cancel request=150, cancel delays [0,10], observation=170, cap=60, acceptance delays [0,10] => ALLOW; observation=145 and acceptance delays [0,10,50] => STOP (pending acceptance). Invalid and oversized grids must reject. No L2 runtime speed claim. Exact repository Python execution remains UNVERIFIED unless independently executed. Rollback baseline: master before this PR (prior merge 97f70b1). Next: exact-module regression execution and independent explicit queue-position uncertainty boundary.
