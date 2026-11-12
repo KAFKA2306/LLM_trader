@@ -119,3 +119,41 @@ def hypothetical_cancel_risk_gate(*, submit_ts_ns, accept_delay_ns,
         "max_allowed_live_exposure_ns": cap,
         "fill_status": "NOT_MODELED",
     }
+
+
+def hypothetical_acceptance_jitter_gate(*, submit_ts_ns, accept_delay_ns_grid,
+                                        cancel_ts_ns, cancel_delay_ns_grid,
+                                        observation_ts_ns, max_live_exposure_ns):
+    """Worst-case gate over explicit acceptance AND cancellation delay scenarios.
+
+    Every Cartesian-product scenario must be valid and ALLOW. No probabilities,
+    fills, exchange acknowledgements or live risk controls are inferred.
+    """
+    if not isinstance(accept_delay_ns_grid, (list, tuple)) or not accept_delay_ns_grid:
+        raise BookEvidenceError("nonempty acceptance delay grid required")
+    if len(accept_delay_ns_grid) > 256:
+        raise BookEvidenceError("acceptance delay grid exceeds 256 scenarios")
+    for delay in accept_delay_ns_grid:
+        _ns(delay, "accept_delay_ns")
+    if len(set(accept_delay_ns_grid)) != len(accept_delay_ns_grid):
+        raise BookEvidenceError("duplicate acceptance delays")
+    # Validate cancellation grid before iteration, including a bounded product.
+    if not isinstance(cancel_delay_ns_grid, (list, tuple)) or not cancel_delay_ns_grid:
+        raise BookEvidenceError("nonempty cancellation delay grid required")
+    if len(accept_delay_ns_grid) * len(cancel_delay_ns_grid) > 256:
+        raise BookEvidenceError("combined scenario grid exceeds 256")
+    results = [hypothetical_cancel_risk_gate(
+        submit_ts_ns=submit_ts_ns, accept_delay_ns=accept_delay,
+        cancel_ts_ns=cancel_ts_ns, cancel_delay_ns_grid=cancel_delay_ns_grid,
+        observation_ts_ns=observation_ts_ns,
+        max_live_exposure_ns=max_live_exposure_ns)
+        for accept_delay in accept_delay_ns_grid]
+    reasons = sorted({reason for result in results for reason in result["reasons"]})
+    return {
+        "status": "HYPOTHETICAL_ONLY",
+        "decision": "STOP" if any(r["decision"] == "STOP" for r in results) else "ALLOW",
+        "reasons": reasons,
+        "max_live_exposure_ns": max(r["max_live_exposure_ns"] for r in results),
+        "scenario_count": len(accept_delay_ns_grid) * len(cancel_delay_ns_grid),
+        "fill_status": "NOT_MODELED",
+    }
