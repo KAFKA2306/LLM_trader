@@ -33,3 +33,11 @@ After: `replay_benchmark.py` is a single-process, dependency-free evaluation har
 ISUCON lessons applied: (1) freeze the before/after workload, (2) repeat measurements instead of selecting peak scores, (3) validate the evaluator and restart state, (4) prefer bare/lite tools to a heavy agent harness, (5) retain a known-good revision and a concise handoff. The heuristic noise threshold is not statistical confidence; host load may differ even with an identical fingerprint. Synthetic input is only software/performance evidence, not exchange throughput or trading profitability.
 
 Acceptance: three local evaluator contract tests passed and Python compilation passed on 2026-11-12. An unchanged-code before/after comparison with identical fixture produced `INCONCLUSIVE_WITHIN_VARIATION` as expected. Further work should vary replay shapes with frozen, independently checked fixtures before performance tuning.
+
+## 2026-11-12 19:14 JST: irreversible continuity failure
+
+Before: `DiffDepthBook.apply` raised on a missing update ID but left the instance usable. A caller that caught the exception could subsequently apply a later event or read a stale best bid/ask, contradicting the documented resnapshot requirement. This is a correctness failure, not a performance problem.
+
+After: a sequence gap permanently sets `needs_resnapshot` on that instance. All subsequent `apply` and `top` calls reject until the caller constructs a new `DiffDepthBook` from a fresh snapshot. The last committed book state remains internally unchanged, but cannot be presented as current. Invalid decimal/crossed updates remain atomic and may be corrected without poisoning continuity, because the input is rejected before the state advances. This is a fail-closed software contract, not a claim of exchange correctness.
+
+Acceptance: three local focused contract tests passed, including gap -> rejected recovery -> rejected read -> new snapshot success, and `py_compile` passed. No benchmark speedup is claimed; this change intentionally prioritizes safety over runtime. Rollback parent: `88f701c8b42d6e094541280009f8147277c62bc6`.

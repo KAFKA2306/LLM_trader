@@ -45,6 +45,7 @@ class DiffDepthBook:
         self.bids = {p: q for p, q in _levels(snapshot["bids"]).items() if q}
         self.asks = {p: q for p, q in _levels(snapshot["asks"]).items() if q}
         self.started = False
+        self.needs_resnapshot = False
         self._check(self.bids, self.asks)
 
     @staticmethod
@@ -53,6 +54,8 @@ class DiffDepthBook:
             raise BookEvidenceError("crossed or locked book")
 
     def apply(self, event):
+        if self.needs_resnapshot:
+            raise BookEvidenceError("resnapshot required: book continuity lost")
         first = _integer(event["U"], "U")
         last = _integer(event["u"], "u")
         if first > last:
@@ -63,6 +66,7 @@ class DiffDepthBook:
             return False  # buffered event older than snapshot
         expected = self.last_id + 1
         if not first <= expected <= last:
+            self.needs_resnapshot = True
             raise BookEvidenceError("missing diff-depth update: resnapshot required")
         bids_delta, asks_delta = _levels(event["b"]), _levels(event["a"])
         bids, asks = self.bids.copy(), self.asks.copy()
@@ -79,5 +83,7 @@ class DiffDepthBook:
         return True
 
     def top(self):
+        if self.needs_resnapshot:
+            raise BookEvidenceError("resnapshot required: book continuity lost")
         return (max(self.bids) if self.bids else None,
                 min(self.asks) if self.asks else None)

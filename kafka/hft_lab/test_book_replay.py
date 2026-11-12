@@ -20,6 +20,13 @@ class BookReplayTest(unittest.TestCase):
         with self.assertRaisesRegex(BookEvidenceError, "missing"):
             book.apply({"U": 102, "u": 102, "b": [], "a": []})
         self.assertEqual(book.last_id, 100)
+        self.assertTrue(book.needs_resnapshot)
+        with self.assertRaisesRegex(BookEvidenceError, "resnapshot"):
+            book.apply({"U": 101, "u": 101, "b": [], "a": []})
+        with self.assertRaisesRegex(BookEvidenceError, "resnapshot"):
+            book.top()
+        # Only a new snapshot creates a trusted state again.
+        book = self.snapshot()
         book.apply({"U": 101, "u": 101, "b": [], "a": []})
         with self.assertRaisesRegex(BookEvidenceError, "duplicate"):
             book.apply({"U": 101, "u": 101, "b": [], "a": []})
