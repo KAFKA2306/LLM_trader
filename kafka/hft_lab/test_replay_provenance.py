@@ -29,16 +29,17 @@ class ProvenanceTest(unittest.TestCase):
             replay.step()
         self.assertEqual(replay.book.last_id, 100)
 
-    def test_reject_snapshot_mismatch_and_post_validation_change(self):
+    def test_reject_snapshot_mismatch_and_isolate_caller_mutation(self):
         manifest, snapshot, events = self.setup_case()
         changed = dict(snapshot, lastUpdateId=99)
         with self.assertRaisesRegex(BookEvidenceError, "snapshot hash mismatch"):
             ProvenanceReplay(manifest, changed, events)
         replay = ProvenanceReplay(manifest, snapshot, events)
-        events[0]["b"] = [["98", "1"]]
-        with self.assertRaisesRegex(BookEvidenceError, "mutated"):
-            replay.step()
-        self.assertEqual(replay.book.last_id, 100)
+        events[0]["b"][0][0] = "98"
+        snapshot["bids"][0][0] = "97"
+        self.assertTrue(replay.step())
+        self.assertEqual(tuple(map(str, replay.top())), ("100", "101"))
+        self.assertEqual(replay.book.last_id, 101)
 
 
 if __name__ == "__main__":
