@@ -1,8 +1,28 @@
-# HFT research: latency evidence first
+# HFT research: autonomous offline verification
 
 This KAFKA-owned, **research-only** component measures market-data reception delay. It does not start a bot, place orders, retrain a model or assert profitability.
 
-## Input contract
+## Current scope: self-contained research (2026-11-12)
+
+The autonomous research loop is **not** a production-HFT project. Its work is restricted to outcomes that the connected agent can complete and verify with repository code, deterministic local tests, and permitted free public market data. A run must select at most one bounded, nonduplicate improvement.
+
+| IN_SCOPE: independently executable | OUT_OF_SCOPE: excluded, not recurring blockers |
+| --- | --- |
+| Validate market-event identity, schema, timestamp units, duplication and provenance | Acquire private production-host receive logs, exchange order/fill history or VPS access |
+| Explicitly convert official historical/live timestamp units into one declared unit; reject ambiguous input | Infer real network jitter or clock error without a measured private host |
+| Deterministic offline event/LOB replay and scenarios driven by fixtures or permitted public historical data | Place orders, connect accounts, manage secrets, deploy a trading bot |
+| Simulate declared fees, delays, jitter, queue/fill assumptions, slippage and downside; label assumptions and uncertainty | Claim actual account fee tier, fill probability, realized PnL or validated live MM profitability |
+| Fix and verify existing KAFKA-owned research code with minimum necessary tests | Buy data, bypass usage restrictions, create new CI pipelines or duplicate ledger entries |
+
+**Evidence labels:** `CODE_VERIFIED` proves software behaviour on fixtures only; `PUBLIC_DATA_VERIFIED` requires source, rights, immutable inputs, dates and reproducible evaluation; `UNVERIFIED` describes unmeasured claims, not a task queue. If no useful independent change remains, return `FIXED_POINT` without a commit.
+
+**Next autonomous target:** implement a small, explicit timestamp-unit conversion/validation adapter for publicly documented Spot event timestamps with fixture tests. This can be completed without access to the user's VPS or account. Its tests must cover milliseconds, microseconds and nanoseconds, rejects invalid/implicit units, and must not invent live reception delay.
+
+### Legacy live-reception calibration (excluded from the hourly loop)
+
+The existing `latency_calibration.py` remains a research utility. Its private host inputs are **not** required to advance the current self-contained work. The original empirical reception-latency hypothesis is parked as `OUT_OF_SCOPE`; retain its source history, do not repeatedly request these inputs, and do not turn simulated delays into measured values.
+
+## Input contract for the parked calibration utility
 
 Capture overlapping data for the **same venue, symbol, event identity and exchange UTC timestamp**:
 
@@ -29,6 +49,6 @@ The calibration is not a backtest. A later, separately verified backtester must 
 
 ## Hourly research loop
 
-The external hourly research automation, not a new GitHub Actions workflow, owns this cadence. Every invocation must (1) read canonical `master` and this ledger, (2) avoid re-running an unchanged experiment, (3) check source data availability and provenance, (4) run a bounded test or evidence audit if inputs permit, (5) save verified new results to `kafka/research/experiments/`, and (6) record exact blockers otherwise. Cross-bot findings may be linked from the central `investor` knowledge base only after independent validation.
+The external hourly research automation, not a new GitHub Actions workflow, owns this cadence. Every invocation must (1) read canonical `master` and this ledger, (2) avoid duplicate experiments, (3) choose one independently executable code/data/replay verification, (4) run only relevant tests and verify exact output, (5) record reproducible new evidence in the existing `kafka/research/experiments/` ledger, and (6) stop at `FIXED_POINT` when no independent work remains. Do **not** repeat requests for the excluded private live-host inputs. Cross-bot findings may be linked from the central `investor` knowledge base only after independent validation.
 
 Do not enable exchange credentials, live trading, deployment, secret access or an external paid data source from the research loop. Risk controls remain deterministic and independent of the LLM.
