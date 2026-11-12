@@ -40,6 +40,13 @@ class ProvenanceReplay:
             raise BookEvidenceError("snapshot hash mismatch")
         if manifest.get("events_sha256") != _sha256(events):
             raise BookEvidenceError("events hash mismatch")
+        # Validate the entire declared feed before the first state transition.
+        # A later mixed-symbol event must not leave a partially replayed book.
+        for index, event in enumerate(events):
+            if not isinstance(event, Mapping):
+                raise BookEvidenceError(f"event {index} must be a mapping")
+            if event.get("venue") != self.venue or event.get("symbol") != self.symbol:
+                raise BookEvidenceError(f"mixed venue/symbol at event {index}: replay rejected")
         # Deep-copy verified inputs once; caller mutation cannot alter replay state.
         self._events = copy.deepcopy(events)
         self.book = DiffDepthBook(copy.deepcopy(snapshot))

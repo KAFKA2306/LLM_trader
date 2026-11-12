@@ -24,10 +24,16 @@ class ProvenanceTest(unittest.TestCase):
         with self.assertRaisesRegex(BookEvidenceError, "hash mismatch"):
             ProvenanceReplay(manifest, snapshot, events)
         manifest = make_manifest("binance-spot", "BTCUSDT", "synthetic-fixture-v1", snapshot, events)
-        replay = ProvenanceReplay(manifest, snapshot, events)
         with self.assertRaisesRegex(BookEvidenceError, "mixed venue/symbol"):
-            replay.step()
-        self.assertEqual(replay.book.last_id, 100)
+            ProvenanceReplay(manifest, snapshot, events)
+
+    def test_late_mixed_event_rejected_before_any_replay(self):
+        manifest, snapshot, events = self.setup_case()
+        events.append({"venue": "binance-spot", "symbol": "ETHUSDT",
+                       "U": 102, "u": 102, "b": [], "a": []})
+        manifest = make_manifest("binance-spot", "BTCUSDT", "synthetic-fixture-v1", snapshot, events)
+        with self.assertRaisesRegex(BookEvidenceError, "event 1"):
+            ProvenanceReplay(manifest, snapshot, events)
 
     def test_reject_snapshot_mismatch_and_isolate_caller_mutation(self):
         manifest, snapshot, events = self.setup_case()
