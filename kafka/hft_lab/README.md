@@ -16,7 +16,7 @@ The autonomous research loop is **not** a production-HFT project. Its work is re
 
 **Evidence labels:** `CODE_VERIFIED` proves software behaviour on fixtures only; `PUBLIC_DATA_VERIFIED` requires source, rights, immutable inputs, dates and reproducible evaluation; `UNVERIFIED` describes unmeasured claims, not a task queue. If no useful independent change remains, return `FIXED_POINT` without a commit.
 
-**Next autonomous target:** implement a small, explicit timestamp-unit conversion/validation adapter for publicly documented Spot event timestamps with fixture tests. This can be completed without access to the user's VPS or account. Its tests must cover milliseconds, microseconds and nanoseconds, rejects invalid/implicit units, and must not invent live reception delay.
+**Implemented first autonomous target:** `timestamp_normalization.py` explicitly converts `ms/us/ns` to signed-64-bit-safe UTC nanoseconds, requires mapping field names, namespaces `trade` and `aggTrade` IDs and rejects undeclared units. It is a pure offline library; vendor event equivalence and clock accuracy are not implied. Five focused fixture contract tests passed locally on 2026-11-12; this is `CODE_VERIFIED`, not market-performance evidence.
 
 ### Legacy live-reception calibration (excluded from the hourly loop)
 
