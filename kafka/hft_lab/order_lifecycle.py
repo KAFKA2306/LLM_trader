@@ -90,3 +90,29 @@ def hypothetical_cancel_delay_sensitivity(*, submit_ts_ns, accept_delay_ns,
         "fill_status": "NOT_MODELED",
         "assumptions": "declared finite delay grid, no probabilities, queue or fills",
     }
+
+
+def hypothetical_cancel_risk_gate(*, submit_ts_ns, accept_delay_ns,
+                                  cancel_ts_ns, cancel_delay_ns_grid,
+                                  observation_ts_ns, max_live_exposure_ns):
+    """Conservative research gate: reject if ANY assumed delay exceeds the cap.
+
+    A STOP is a scenario decision, not an exchange cancel instruction.
+    """
+    cap = _ns(max_live_exposure_ns, "max_live_exposure_ns")
+    sensitivity = hypothetical_cancel_delay_sensitivity(
+        submit_ts_ns=submit_ts_ns, accept_delay_ns=accept_delay_ns,
+        cancel_ts_ns=cancel_ts_ns, cancel_delay_ns_grid=cancel_delay_ns_grid,
+        observation_ts_ns=observation_ts_ns)
+    breached = sensitivity["max_live_exposure_ns"] > cap
+    still_live = any(s["state"] == "LIVE_UNFILLED_ASSUMPTION"
+                     for s in sensitivity["scenarios"])
+    return {
+        "status": "HYPOTHETICAL_ONLY",
+        "decision": "STOP" if breached or still_live else "ALLOW",
+        "reasons": (["EXPOSURE_LIMIT_EXCEEDED"] if breached else [])
+                   + (["POSSIBLY_LIVE_AT_OBSERVATION"] if still_live else []),
+        "max_live_exposure_ns": sensitivity["max_live_exposure_ns"],
+        "max_allowed_live_exposure_ns": cap,
+        "fill_status": "NOT_MODELED",
+    }
