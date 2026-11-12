@@ -62,13 +62,13 @@ class CancelTimelineTest(unittest.TestCase):
     def test_acceptance_jitter_grid_fails_closed(self):
         from order_lifecycle import hypothetical_acceptance_jitter_gate
         params = dict(submit_ts_ns=100, cancel_ts_ns=150,
-                      cancel_delay_ns_grid=[0, 10], observation_ts_ns=145,
+                      cancel_delay_ns_grid=[0, 10], observation_ts_ns=170,
                       max_live_exposure_ns=60)
         safe = hypothetical_acceptance_jitter_gate(
             **params, accept_delay_ns_grid=[0, 10])
         self.assertEqual((safe["decision"], safe["scenario_count"]), ("ALLOW", 4))
         pending = hypothetical_acceptance_jitter_gate(
-            **params, accept_delay_ns_grid=[0, 10, 50])
+            **dict(params, observation_ts_ns=145), accept_delay_ns_grid=[0, 10, 50])
         self.assertEqual(pending["decision"], "STOP")
         self.assertIn("ACCEPTANCE_PENDING_AT_OBSERVATION", pending["reasons"])
         for grid in ([], [0, 0], [0, True], [-1], list(range(257))):
