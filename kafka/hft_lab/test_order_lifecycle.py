@@ -59,6 +59,26 @@ class CancelTimelineTest(unittest.TestCase):
         self.assertEqual(result["decision"], "STOP")
         self.assertEqual(result["reasons"], ["ACCEPTANCE_PENDING_AT_OBSERVATION"])
 
+    def test_acceptance_jitter_grid_fails_closed(self):
+        from order_lifecycle import hypothetical_acceptance_jitter_gate
+        params = dict(submit_ts_ns=100, cancel_ts_ns=150,
+                      cancel_delay_ns_grid=[0, 10], observation_ts_ns=145,
+                      max_live_exposure_ns=60)
+        safe = hypothetical_acceptance_jitter_gate(
+            **params, accept_delay_ns_grid=[0, 10])
+        self.assertEqual((safe["decision"], safe["scenario_count"]), ("ALLOW", 4))
+        pending = hypothetical_acceptance_jitter_gate(
+            **params, accept_delay_ns_grid=[0, 10, 50])
+        self.assertEqual(pending["decision"], "STOP")
+        self.assertIn("ACCEPTANCE_PENDING_AT_OBSERVATION", pending["reasons"])
+        for grid in ([], [0, 0], [0, True], [-1], list(range(257))):
+            with self.subTest(grid=grid), self.assertRaises(BookEvidenceError):
+                hypothetical_acceptance_jitter_gate(
+                    **params, accept_delay_ns_grid=grid)
+        with self.assertRaises(BookEvidenceError):
+            hypothetical_acceptance_jitter_gate(
+                **params, accept_delay_ns_grid=[0, 70])
+
     def test_cancel_delay_grid_bounds_and_fail_closed(self):
         from order_lifecycle import hypothetical_cancel_delay_sensitivity
         params = dict(submit_ts_ns=100, accept_delay_ns=10,
