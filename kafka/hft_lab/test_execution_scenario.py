@@ -77,5 +77,22 @@ class HypotheticalExecutionTest(unittest.TestCase):
                 delay_ns=10, side="buy", quantity="1", fee_bps=0)
 
 
+    def test_reject_event_at_or_before_snapshot_clock(self):
+        from replay_provenance import make_manifest
+        from execution_scenario import hypothetical_delayed_taker
+        snapshot = {"lastUpdateId": 100, "bids": [["99", "2"]], "asks": [["101", "2"]]}
+        for event_ts in (89, 90):
+            with self.subTest(event_ts=event_ts):
+                events = [{"venue": "fixture", "symbol": "TEST", "exchange_ts_ns": event_ts,
+                           "U": 101, "u": 101, "b": [], "a": []},
+                          {"venue": "fixture", "symbol": "TEST", "exchange_ts_ns": 120,
+                           "U": 102, "u": 102, "b": [], "a": []}]
+                manifest = make_manifest("fixture", "TEST", "synthetic-v1", snapshot, events)
+                with self.assertRaisesRegex(BookEvidenceError, "snapshot timestamp"):
+                    hypothetical_delayed_taker(
+                        manifest, snapshot, events, snapshot_ts_ns=90, submit_ts_ns=100,
+                        delay_ns=10, side="buy", quantity="1", fee_bps="0")
+
+
 if __name__ == "__main__":
     unittest.main()

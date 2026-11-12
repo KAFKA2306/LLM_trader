@@ -85,6 +85,8 @@ def hypothetical_delayed_taker(manifest, snapshot, events, *, snapshot_ts_ns,
         if not isinstance(event, dict):
             raise BookEvidenceError(f"event {i} must be a dict")
         t = timestamp(event.get("exchange_ts_ns"), f"event {i} exchange_ts_ns")
+        if t <= start:
+            raise BookEvidenceError(f"event {i} precedes or equals snapshot timestamp")
         if t < last:
             raise BookEvidenceError(f"event {i} timestamp order violation")
         timestamps.append(t)
