@@ -71,3 +71,12 @@ Acceptance: late mixed-symbol fixture rejects during construction; valid fixture
 Before: manifest hashes and venue/symbol were checked before construction, but a late update-ID gap or crossed book was discovered only during replay. Catching the error could leave earlier events visible as a partial replay. After: construct a disposable `DiffDepthBook` over the frozen input and validate the entire sequence before publishing the actual replay book. Reject late gaps and crossed updates with the failing event index. This deliberately trades an additional O(N) pass and temporary book for all-or-nothing input acceptance; it is not a speed optimization. No new infrastructure or market data is needed.
 
 Acceptance: reconstructed local book/provenance contracts passed 3 focused tests (valid, late gap, late crossed), and Python compilation passed. Exact repository module integration and complete regression suite remain UNVERIFIED because container GitHub clone was unavailable. No HFT speed or PnL claim. Rollback parent: `63196134912e88f880c1325cb3103a6565504a83`.
+
+
+## 2026-11-13: bounded hypothetical taker-cost scenario
+
+Before: L2 replay reconstructed price levels, but no independent, explicit model could calculate the quote-currency cost of consuming a declared quantity. A top-of-book-only calculation would understate cost when requested quantity spans multiple price levels.
+
+After: `execution_scenario.py` sweeps frozen visible levels with Decimal arithmetic and applies separately declared fee and extra-slippage basis points. It fails closed when depth is insufficient, input is invalid, or the book needs a resnapshot. It returns `HYPOTHETICAL_ONLY`, never a simulated observed fill or PnL. No queue position, latency, impact or real liquidity availability is inferred. The method does not modify the book.
+
+Acceptance: fixed two-level fixture: buy 3 units costs gross 304 quote, fee 0.304 at 10 bps, extra slippage 0.152 at 5 bps, effective 304.456; sell 3 gross 296 and effective 295.704 at 10 bps. Rejection of insufficient depth, invalid costs and continuity-lost book is required. No speed improvement is claimed, so the L2 performance benchmark is not an adoption criterion. Baseline: e7feda0cf0c73ce3ad007e8dee6261dcb870d992. Source: self-contained accounting identity; no market dataset or rights assumption.
